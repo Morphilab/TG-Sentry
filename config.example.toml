@@ -1,0 +1,68 @@
+# ============================================================
+# tg-sentry — configuración de ejemplo
+# Copia este archivo a ~/.config/tg-sentry/config.toml y rellénalo.
+# El archivo real debe tener permisos 0600 (tg-sentry lo verifica).
+# ============================================================
+
+[telegram]
+# OBTÉN ESTOS VALORES A MANO en https://my.telegram.org
+# (API development tools). tg-sentry NO scrapea ese sitio.
+# Se validan intentando conectar; si son inválidos, error claro.
+api_id = 0                  # entero, ej. 12345678
+api_hash = ""               # string de 32 caracteres
+phone = ""                  # teléfono con prefijo de país, ej. "+34600000000"
+# session = ""              # OPCIONAL: ruta de sesión; vacío = XDG por defecto.
+                            # Alternativa: variable de entorno TG_SENTRY_STRING_SESSION
+                            # (string-session SOLO por env var, nunca en este archivo).
+
+[safety]
+# Peers intocables además de los blindados de fábrica (tu propia cuenta,
+# Saved Messages, notificaciones de servicio 777000).
+# Acepta ids numéricos (ej. 123456789) y usernames (ej. "durov").
+whitelist = []
+# No tocar chats privados de contactos — EXCLUSIÓN DURA por defecto.
+# false = desactiva la protección de contactos (decisión explícita tuya).
+protect_contacts = true
+# Aviso informativo: chats privados con actividad más reciente que N días
+# aparecen marcados en el plan para revisión (el opt-in por ítem que
+# bloquee la operación NO está implementado aún).
+recent_private_days = 30
+
+[limits]
+# writes_per_min SOLO puede BAJAR respecto al default (4). Subirlo exige
+# editar este archivo Y pasar --ack-over-limit al aplicar.
+writes_per_min = 4
+# Topes por tipo de operación (por hora). Empírico-comunitarios, conservadores.
+leave_groups_per_hour = 30
+block_per_hour = 50
+delete_messages_per_hour = 100
+# NOTA: los topes duros de sesión (50 destructivas/hora, 200/día) NO son
+# configurables — son constantes del código por diseño.
+# FloodWait mayor que este umbral pausa la cola (reanudación visible en TUI).
+floodwait_pause_threshold_s = 300
+# Segundo FloodWait dentro de esta ventana → pausa indefinida + aviso.
+floodwait_pattern_window_s = 300
+# Cooldown tras borrar mensajes propios, PROPORCIONAL a lo borrado
+# (12s por mensaje con el default: grupo con 3 mensajes tuyos espera 60s,
+# uno con 90 espera ~18 min). Se omite si no borró nada o es el último
+# paso de borrado. El default (1200 = ~300 msgs/h) es el más prudente;
+# 300 = ~1200 msgs/h si priorizas agilidad (borrar tu propio contenido
+# es la operación de menor riesgo de la herramienta).
+own_messages_cooldown_s = 1200
+
+[plan]
+# Re-validación del plan contra estado remoto antes de ejecutar.
+ttl_min = 5
+
+[cache]
+# TTL del inventario local (SQLite). Un plan nuevo fuerza refresco
+# o se marca "basado en caché caducada" con advertencia.
+ttl_min = 60
+
+[audit]
+# Rotación de la auditoría JSONL (append-only; el activo nunca se trunca).
+rotate_bytes = 10485760     # 10 MB
+keep_days = 90
+
+[logging]
+level = "INFO"

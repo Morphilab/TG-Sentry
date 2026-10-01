@@ -1,0 +1,33 @@
+# ============================================================
+# tg-sentry — .gitignore (se comparte)
+# Solo reglas públicas/compartidas: lo interno del proyecto
+# (AGENTS.md, dev/, .zcode/, .vscode/) vive en .git/info/exclude,
+# que es local y nunca se publica.
+# ============================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Secretos y artefactos locales (NUNCA al repo público)
+.env
+*.session
+*.session-journal
+config.toml
+logs/
+audit/
+exports/
+coverage.json
+.coverage
+htmlcov/
+
+# Caches de herramientas
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+

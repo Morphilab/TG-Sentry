@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 3.11 es el floor declarado en pyproject; 3.12 la versión de desarrollo
+        python-version: ["3.11", "3.12"]
+    steps:
+      # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # v5.3.0
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Instalar (app + dev)
+        run: python -m pip install -e .[dev]
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Tipos (mypy)
+        run: mypy
+      - name: Tests (pytest, sin red)
+        run: pytest -q
