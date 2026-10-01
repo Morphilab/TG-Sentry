@@ -9,6 +9,7 @@ nacer en ese loop. El runtime ejecuta en un loop limpio y por tanto es inmune.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 
 import pytest
@@ -28,6 +29,10 @@ async def _patron_telethon() -> bool:
     return await tarea
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="asyncio.eager_task_factory no existe antes de 3.12",
+)
 def test_el_patron_telethon_muere_con_eager_factory() -> None:
     # sanity del diagnóstico: en un loop eager, el patrón de telethon falla
     async def main() -> bool:
