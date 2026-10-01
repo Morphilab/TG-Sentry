@@ -1,132 +1,144 @@
 # tg-sentry
 
-Monitor y limpiador de cuenta de Telegram — **seguro por diseño**.
+**English** | [Español](README.es.md)
 
-> ## ⚠️ ADVERTENCIA — lee esto antes de usar la herramienta
+Monitor and cleaner for your own Telegram account — **safe by design**.
+
+> ## ⚠️ WARNING — read this before using the tool
 >
-> **Esta herramienta puede provocar la suspensión (baneo) de tu cuenta de Telegram.**
-> Telegram penaliza las acciones masivas automatizadas (salir de grupos, bloquear
-> usuarios, borrar historiales) aunque se respeten los FloodWait. tg-sentry aplica
-> límites conservadores y pausas automáticas, pero **ningún software puede
-> eliminar ese riesgo**. Úsala bajo tu responsabilidad, con cuenta propia y a un
-> ritmo prudente.
+> **This tool can get your Telegram account suspended (banned).** Telegram
+> penalizes automated mass actions (leaving groups, blocking users, deleting
+> histories) even when FloodWaits are respected. tg-sentry applies conservative
+> limits and automatic pauses, but **no software can eliminate that risk**. Use
+> it at your own risk, on your own account, at a prudent pace.
 >
-> Además, los borrados en Telegram son **irreversibles**: todo pasa por
-> dry-run → plan → confirmación explícita → auditoría, pero lo ejecutado no se
-> puede deshacer.
+> Also, deletions on Telegram are **irreversible**: everything goes through
+> dry-run → plan → explicit confirmation → audit, but whatever is executed
+> cannot be undone.
 
-## Qué hace
+> ⚠️ **AI Disclosure / Divulgación de IA**
+>
+> **English:** This project was developed with assistance from artificial intelligence
+> tools. Given the automated nature of some components, users are advised to review
+> and test the code independently before integrating it into their own systems.
+>
+> **Español:** Este proyecto fue desarrollado con asistencia de herramientas de
+> inteligencia artificial. Dada la naturaleza automatizada de algunos componentes,
+> se recomienda que los usuarios revisen y prueben el código independientemente antes
+> de integrarlo en sus propios sistemas.
 
-- **Inventario** de todos tus diálogos (grupos, canales, bots, chats privados)
-  con filtros combinables (tipo, nombre, regex, inactividad, archivados…).
-- **Limpieza con pasos correctos por tipo**:
-  - Bots: eliminar chat + bloquear.
-  - Grupos/canales: salir (darse de baja).
-  - Privados: eliminar ± revoke (≤48h borra del otro lado) ± bloquear.
-  - **Mensajes propios** en cualquier chat: dos modos — solo-para-ti (sin
-    límite de edad; en chats privados, bots y grupos básicos) o para-todos
-    (≤48h; fuera de 48h el servidor degrada a solo-para-ti). En canales y
-    supergrupos la API borra SIEMPRE para todos: el modo solo-para-ti se
-    rechaza ahí, nunca se ejecuta un borrado con la promesa invertida.
-    Con opción de NO salir del chat (limpiar y conservar).
-- **Seguro por diseño**: dry-run por defecto, peers blindados (tu cuenta,
-  Saved Messages, 777000, whitelist, chats secretos; la protección de
-  «donde eres creador» queda pendiente de verificar tu rol en cada chat y
-  hoy avisa «rol sin verificar»),
-  re-validación del plan (TTL 5 min), auditoría JSONL con rotación y export.
-- **Anti-baneo estructural**: token bucket (~4 ops/min, solo a la baja),
-  caps por tipo (30 salidas/h, 50 bloqueos/h), topes duros de sesión
-  (50 destructivas/h, 200/día — constantes de código), FloodWait respetado
-  con prioridad absoluta (gracia 2× tras cada espera), pausa indefinida ante
-  patrón de baneo (2º FloodWait <5 min), cooldown extra entre pasos de
-  borrado masivo de mensajes.
-- **TUI completa** (Textual): dashboard filtrable, selección masiva,
-  plan dry-run, confirmación tecleada, ejecución con barra/ETA, resultados
-  agrupados, auditoría revisable y exportable, ajustes.
-- **CLI headless** para automatizar el mismo motor.
+## What it does
 
-## Estado
+- **Inventory** of all your dialogs (groups, channels, bots, private chats)
+  with combinable filters (type, name, regex, inactivity, archived…).
+- **Cleanup with the right steps per type**:
+  - Bots: delete chat + block.
+  - Groups/channels: leave.
+  - Private chats: delete ± revoke (≤48h also removes them from the other
+    side) ± block.
+  - **Your own messages** in any chat: two modes — for-you-only (no age
+    limit; in private chats, bots and basic groups) or for-everyone (≤48h;
+    beyond 48h the server degrades it to for-you-only). In channels and
+    supergroups the API ALWAYS deletes for everyone: the for-you-only mode is
+    rejected there — a deletion is never executed with the promise reversed.
+    With the option to NOT leave the chat (clean and keep it).
+- **Safe by design**: dry-run by default, protected peers (your own account,
+  Saved Messages, 777000, whitelist, secret chats; the "where you are the
+  creator" protection is pending per-chat role verification and currently
+  warns "role unverified"), plan re-validation (5 min TTL), JSONL audit log
+  with rotation and export.
+- **Structural anti-ban**: token bucket (~4 ops/min, lower-bound only),
+  per-type caps (30 leaves/h, 50 blocks/h), hard session caps (50 destructive
+  ops/h, 200/day — code constants), FloodWait respected with absolute
+  priority (2× grace after every wait), indefinite pause on a ban pattern
+  (2nd FloodWait <5 min), extra cooldown between mass message-deletion steps.
+- **Full TUI** (Textual): filterable dashboard, bulk selection, dry-run plan,
+  typed confirmation, execution with progress bar/ETA, grouped results,
+  reviewable and exportable audit, settings.
+- **Headless CLI** to automate the same engine.
 
-| Milestone | Alcance | Estado |
+## Status
+
+| Milestone | Scope | Status |
 |---|---|---|
-| M0 | Scaffolding, config, sesión segura, login 2FA | ✅ |
-| M1 | Inventario + piloto de semánticas de la API | ✅ |
-| M2 | Planificador + safety + auditoría | ✅ |
-| M3 | Ejecutor + límites + CLI headless | ✅ |
+| M0 | Scaffolding, config, safe session, 2FA login | ✅ |
+| M1 | Inventory + API semantics pilot | ✅ |
+| M2 | Planner + safety + audit | ✅ |
+| M3 | Executor + limits + headless CLI | ✅ |
 | M4 | TUI base | ✅ |
-| M5 | TUI de ejecución + auditoría | ✅ |
-| M6 | Mensajes propios + export + docs finales | ✅ |
+| M5 | Execution TUI + audit | ✅ |
+| M6 | Own messages + export + final docs | ✅ |
 
-## Instalación
+## Installation
 
-Requiere Python ≥ 3.11.
+Requires Python ≥ 3.11.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-pip install -e .[dev]   # desarrollo
+pip install -e .[dev]   # development
 ```
 
-## Uso
+## Usage
 
-### TUI (recomendado)
+### TUI (recommended)
 
 ```bash
 tg-sentry tui
 ```
 
-1. Login (si no hay sesión): teléfono → código → 2FA.
-2. Dashboard: filtra (tipos, nombre, regex, inactividad, archivados, unread).
-3. Selecciona: `espacio` marca, `a` todo lo filtrado, `i` invierte, `n` limpia.
-   Los blindados aparecen con 🔒 y jamás se pueden marcar.
-4. `p` → plan dry-run (pasos por peer, opciones, avisos, excluidos).
-5. `c` → confirmación: contador de destructivas, blindados excluidos, aviso
-   de suspensión; teclea `CONFIRMAR` + Enter.
-6. Ejecución con barra/ETA → Resultados. `v` auditoría, `o` ajustes.
+1. Login (if there is no session): phone → code → 2FA.
+2. Dashboard: filter (types, name, regex, inactivity, archived, unread).
+3. Select: `space` toggles, `a` selects everything filtered, `i` inverts,
+   `n` clears. Protected peers show 🔒 and can never be selected.
+4. `p` → dry-run plan (steps per peer, options, warnings, excluded).
+5. `c` → confirmation: destructive-op counters, excluded protected peers,
+   suspension warning; type the literal token `CONFIRMAR` + Enter.
+6. Execution with progress bar/ETA → Results. `v` audit, `o` settings.
 
-### CLI headless
+### Headless CLI
 
 ```bash
 tg-sentry login
-tg-sentry dialogs --refresh              # inventario (solo lectura)
+tg-sentry dialogs --refresh              # inventory (read-only)
 tg-sentry plan --filter "kinds=bot,inactive=365" --output plan.json
 tg-sentry apply --plan plan.json --confirm CONFIRMAR [--limit-peers N]
 tg-sentry audit [--since 2025-01-01] [--export csv]
-tg-sentry export --format json|csv [--output ruta]
-tg-sentry doctor                          # diagnóstico de rutas y permisos
+tg-sentry export --format json|csv [--output path]
+tg-sentry doctor                          # path and permission diagnostics
 ```
 
-Filtros: `kinds=bot+channel+group+user`, `name=…`, `regex=…`, `inactive=Nd`,
+Filters: `kinds=bot+channel+group+user`, `name=…`, `regex=…`, `inactive=Nd`,
 `archived=true|false|any`, `unread_min=N`.
-Opciones de plan: `--delete-own me|all|off` (mensajes propios),
-`--no-leave` (limpiar sin salir).
+Plan options: `--delete-own me|all|off` (own messages),
+`--no-leave` (clean without leaving).
 
-Ejemplos:
+Examples:
 
 ```bash
-# 10 bots viejos como piloto (~20 ops, ~5 min)
+# 10 old bots as a pilot (~20 ops, ~5 min)
 tg-sentry plan --filter "kinds=bot,inactive=365" --output plan.json
 tg-sentry apply --plan plan.json --confirm CONFIRMAR --limit-peers 10
 
-# Limpiar TUS mensajes de un grupo que conservas (sin salir)
-tg-sentry plan --filter "name=ejemplo" --delete-own me --no-leave --output plan.json
+# Clean YOUR messages from a group you keep (without leaving)
+tg-sentry plan --filter "name=example" --delete-own me --no-leave --output plan.json
 
-# Canales inactivos >6 meses (darse de baja)
+# Channels inactive >6 months (unsubscribe)
 tg-sentry plan --filter "kinds=channel,inactive=180" --output plan.json
 ```
 
-La configuración vive en `~/.config/tg-sentry/config.toml` (ver
-`config.example.toml`), la sesión en `~/.local/share/tg-sentry/` (permisos
-`0600` verificados), logs y auditoría en `~/.local/state/tg-sentry/`.
+Configuration lives in `~/.config/tg-sentry/config.toml` (see
+`config.example.toml`), the session in `~/.local/share/tg-sentry/`
+(verified `0600` permissions), logs and audit in `~/.local/state/tg-sentry/`.
 
-## Documentación
+## Documentation
 
-- `docs/security.md` — modelo de amenazas y advertencias
-- `docs/telegram-limits.md` — límites conocidos (empíricos) y semánticas
+- `docs/security.md` — threat model and warnings
+- `docs/telegram-limits.md` — known (empirical) limits and semantics
 
-La documentación de diseño (decisiones técnicas, hallazgos del spike y el
-protocolo del piloto) es interna del proyecto y no se publica.
+Design documentation (technical decisions, spike findings, the pilot
+protocol) is project-internal and not published.
 
-## Licencia
+## License
 
 MIT.
