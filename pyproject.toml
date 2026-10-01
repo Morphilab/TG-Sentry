@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Communications :: Chat :: Telegram",
+    "Topic :: Communications :: Chat",
     "Topic :: Utilities",
 ]
 dependencies = [
