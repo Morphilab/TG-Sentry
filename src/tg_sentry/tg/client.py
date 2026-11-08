@@ -25,6 +25,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+import telethon
 from telethon import TelegramClient
 from telethon.errors import (
     FloodWaitError,
@@ -42,6 +43,12 @@ from tg_sentry import redact
 STRING_SESSION_ENV = "TG_SENTRY_STRING_SESSION"
 
 PromptFn = Callable[[str], str]
+
+
+def version_telethon() -> str:
+    """Versión de Telethon (para `doctor`). El import de telethon vive SOLO
+    en tg/ (invariante 1): el CLI lo consume por aquí."""
+    return str(telethon.__version__)
 
 
 class CredentialsError(Exception):
@@ -91,17 +98,21 @@ async def start_code_login(
     redact.register_secret(api_hash)
     redact.register_secret(phone)
     client = build_client(api_id, api_hash, session)
-    await client.connect()
-    harden_session_perms(session if not os.environ.get(STRING_SESSION_ENV) else None)
-    if await client.is_user_authorized():
-        return client, None
     try:
+        await client.connect()
+        harden_session_perms(session if not os.environ.get(STRING_SESSION_ENV) else None)
+        if await client.is_user_authorized():
+            return client, None
         sent = await client.send_code_request(phone)
     except BaseException:
-        # sin fuga de cliente conectado: si pedir el código falla (FloodWait,
-        # api_id inválido, red), el cliente se desconecta ANTES de propagar —
-        # un reintento creaba un SEGUNDO cliente sobre el mismo .session
-        # (SQLite) con riesgo de corruptela — auditoría 2026-09.
+        # sin fuga de cliente conectado: CUALQUIER fallo tras connect()
+        # (harden, is_user_authorized, send_code_request — FloodWait, red,
+        # api_id inválido) desconecta ANTES de propagar. Un reintento creaba
+        # un SEGUNDO cliente sobre el mismo .session (SQLite) con riesgo de
+        # corruptela. robustez: el patrón solo envolvía send_code_request
+        # y un fallo en is_user_authorized dejaba el huérfano conectado
+        # DENTRO del runtime de la TUI — set_client solo ve clientes
+        # RETORNADOS, así que ni on_exit_app podía desconectarlo.
         with contextlib.suppress(Exception):
             await client.disconnect()
         raise
@@ -167,7 +178,7 @@ def build_client(api_id: int, api_hash: str, session: str | Path | None = None) 
     flood_sleep_threshold=0: Telethon NO absorbe FloodWaits pequeños durmiendo
     en silencio dentro de __call__ — TODOS cruzan a execute_step, que los
     traduce y el motor los respeta y cuenta para el detector de patrón de
-    baneo (auditoría 2026-09: con el default de 60s el monitor era ciego).
+    baneo (robustez: con el default de 60s el monitor era ciego).
     """
     redact.register_secret(api_hash)
     return TelegramClient(
@@ -191,7 +202,7 @@ async def connect_cliente_autorizado(
     Para la TUI: jamás interactúa ni envía código — si la sesión no está
     autorizada lanza SesionNoAutorizada (el camino es la pantalla login;
     un prompt bloqueante dentro de la TUI congela la UI y el loop de red,
-    hallazgo auditoría 2026-09).
+    hallazgo robustez).
     """
     _validate_credentials(api_id, api_hash, phone="", check_phone=False)
     redact.register_secret(api_hash)
@@ -227,7 +238,7 @@ async def connect_and_login(
         client, phone_code_hash = await start_code_login(api_id, api_hash, phone, session)
     except FloodWaitError as exc:
         # Telegram pide espera al enviar el código: taxonomía con segundos
-        # (3ª auditoría: salía crudo y el CLI lo mostraba como traceback;
+        # (robustez: salía crudo y el CLI lo mostraba como traceback;
         # start_code_login ya desconectó el cliente antes de propagar)
         raise tg_errors.FloodWait(max(1, int(exc.seconds))) from exc
     if phone_code_hash is None:
@@ -252,7 +263,7 @@ async def connect_and_login(
                     break
                 except PasswordInvalid as exc:
                     # el reintento es SIEMPRE posible: ask_pw tiene fallback
-                    # getpass (3ª auditoría: `or password_prompt is None`
+                    # getpass (robustez: `or password_prompt is None`
                     # mataba el bucle en CLI — una contraseña incorrecta era
                     # error sin segundas oportunidades)
                     if intento == 2:
@@ -262,13 +273,13 @@ async def connect_and_login(
         return client
     except FloodWaitError as exc:
         # Telegram pide espera al enviar código: el CLI la traduce a mensaje
-        # accionable (3ª auditoría: salía traceback crudo)
+        # accionable (robustez: salía traceback crudo)
         raise tg_errors.FloodWait(max(1, int(exc.seconds))) from exc
     except BaseException:
         # Ctrl-C en el prompt, código inválido o 2FA agotado: el cliente
         # quedaba CONECTADO y huérfano agarrando el lock SQLite de la sesión
         # — el reintento del usuario creaba un 2º cliente sobre el mismo
-        # .session ("database is locked") (2ª auditoría)
+        # .session ("database is locked") (robustez)
         with contextlib.suppress(Exception):
             await client.disconnect()
         raise

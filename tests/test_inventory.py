@@ -220,7 +220,7 @@ def test_load_incompatible_da_error_accionable(tmp_path: Path) -> None:
 
 
 def test_contact_ids_forma_invalida_devuelve_vacio_con_warning(tmp_path: Path) -> None:
-    """2ª auditoría: JSON válido de forma incorrecta devolvía un set de
+    """JSON válido de forma incorrecta devolvía un set de
     strings sin aviso → la protección dura de contactos dejaba de matchear."""
     import json as _json
     import sqlite3
@@ -238,7 +238,7 @@ def test_contact_ids_forma_invalida_devuelve_vacio_con_warning(tmp_path: Path) -
 
 
 def test_me_id_corrupto_devuelve_none_con_warning(tmp_path: Path) -> None:
-    """2ª auditoría: int() sobre meta corrupta reventaba con traceback en
+    """int() sobre meta corrupta reventaba con traceback en
     vez del camino fail-closed accionable del CLI."""
     import sqlite3
 
@@ -255,7 +255,7 @@ def test_me_id_corrupto_devuelve_none_con_warning(tmp_path: Path) -> None:
 
 
 def test_fetched_at_naive_no_revienta_cache_age(tmp_path: Path) -> None:
-    """2ª auditoría: un stamp naive (edición manual) hacía TypeError al
+    """un stamp naive (edición manual) hacía TypeError al
     restar contra now(UTC); se normaliza a UTC como en audit.py."""
     import sqlite3
 
@@ -273,7 +273,7 @@ def test_fetched_at_naive_no_revienta_cache_age(tmp_path: Path) -> None:
 
 
 def test_load_last_message_naive_no_reventa_filtros(tmp_path: Path) -> None:
-    """2ª auditoría: last_message_at naive comparado con now(UTC) en los
+    """last_message_at naive comparado con now(UTC) en los
     filtros era TypeError; load() lo normaliza."""
     import sqlite3
 
@@ -291,7 +291,7 @@ def test_load_last_message_naive_no_reventa_filtros(tmp_path: Path) -> None:
 
 
 def test_db_corrupta_levanta_cache_incompatible(tmp_path: Path) -> None:
-    """2ª auditoría: un inventory.db ilegible (basura, disco dañado) reventaba
+    """un inventory.db ilegible (basura, disco dañado) reventaba
     con traceback crudo y mataba la TUI en el arranque; ahora es
     CacheIncompatible accionable en TODAS las lecturas."""
     import pytest
@@ -311,7 +311,7 @@ def test_db_corrupta_levanta_cache_incompatible(tmp_path: Path) -> None:
 
 
 def test_fetched_at_corrupta_es_cache_incompatible(tmp_path: Path) -> None:
-    """P2 3ª auditoría: meta fetched_at corrupto → CacheIncompatible visible
+    """meta fetched_at corrupto → CacheIncompatible visible
     (contrato "corrupto en TODAS las lecturas"), no ValueError crudo que
     reventaba cache_age/is_stale en CLI y TUI."""
     import sqlite3
@@ -328,3 +328,25 @@ def test_fetched_at_corrupta_es_cache_incompatible(tmp_path: Path) -> None:
     conn.close()
     with pytest.raises(CacheIncompatible):
         inventory.fetched_at(db)
+
+
+def test_contact_ids_meta_ausente_avisa_sin_silencio(
+    tmp_path: Path, caplog
+) -> None:
+    """la meta ausente (caché de una versión vieja) dejaba la
+    protección de contactos apagada EN SILENCIO — fail-open visible."""
+    import logging
+
+    db = tmp_path / "inventory.db"
+    inventory.store(_to_infos(), db, me_id=42)  # sin contact_ids: meta ausente
+    with caplog.at_level(logging.WARNING, logger="tg_sentry.inventory"):
+        ids = inventory.contact_ids(db)
+    assert ids == set()
+    assert any("contact_ids" in r.message and "INACTIVA" in r.message for r in caplog.records)
+
+    # con la meta presente (aunque sea vacía): sin warning
+    caplog.clear()
+    inventory.store(_to_infos(), db, me_id=42, contact_ids=set())
+    with caplog.at_level(logging.WARNING, logger="tg_sentry.inventory"):
+        assert inventory.contact_ids(db) == set()
+    assert not [r for r in caplog.records if "INACTIVA" in r.message]

@@ -2,7 +2,7 @@
 
 Antes un ConfigError en la TUI reventaba con la pantalla de crash de
 Textual (traceback); ahora se muestra el mensaje accionable y se sale
-limpio con 'q' (auditoría 2026-09).
+limpio con 'q' (robustez).
 """
 
 from __future__ import annotations

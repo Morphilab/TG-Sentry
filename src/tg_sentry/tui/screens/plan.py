@@ -25,7 +25,12 @@ from tg_sentry import inventory
 from tg_sentry.config import Config
 from tg_sentry.inventory import CacheIncompatible
 from tg_sentry.models import DialogInfo
-from tg_sentry.planner import ActionPlan, PlannerOptions, build_plan
+from tg_sentry.planner import (
+    RAZONES_NO_APLICABLES,
+    ActionPlan,
+    PlannerOptions,
+    build_plan,
+)
 from tg_sentry.tui.base import BaseScreen
 from tg_sentry.tui.screens.confirm import ConfirmScreen
 from tg_sentry.tui.screens.dashboard import KIND_LABELS
@@ -97,9 +102,9 @@ class PlanScreen(BaseScreen):
             own_all = False  # "me" gana: es el modo seguro, la UI lo aclara
             delete_own = "me"
             self.query_one("#o-delete-own-all", Checkbox).value = False
-        # frescura REAL de la caché (2ª auditoría: el default True mentía —
-        # un plan sobre un inventario de hace semanas llegaba a confirmar sin
-        # ninguna señal de staleness)
+        # frescura REAL de la caché (el default True no reflejaba el estado
+        # real — un plan sobre un inventario de hace semanas llegaba a
+        # confirmar sin ninguna señal de staleness)
         caducada = inventory.is_stale(self.sentry_app.config.cache.ttl_min)
         return PlannerOptions(
             block_bots=self.query_one("#o-block-bots", Checkbox).value,
@@ -118,7 +123,7 @@ class PlanScreen(BaseScreen):
             self._regenerar_inner(config)
         except CacheIncompatible as exc:
             # inventario corrupto: visible y sin plan, igual que el dashboard
-            # (3ª auditoría: antes traceback/crash screen)
+            # (robustez: antes traceback/crash screen)
             self._plan = None
             self.query_one("#tabla", DataTable).clear()
             self.query_one("#plan-contadores", Static).update(
@@ -129,7 +134,7 @@ class PlanScreen(BaseScreen):
     def _regenerar_inner(self, config: Config) -> None:
         me = inventory.me_id()
         if me is None:
-            # Fail-closed: sin identidad propia no hay plan (auditoría 2026-09).
+            # Fail-closed: sin identidad propia no hay plan (robustez).
             self._plan = None
             self.query_one("#tabla", DataTable).clear()
             self.query_one("#plan-contadores", Static).update(
@@ -139,19 +144,20 @@ class PlanScreen(BaseScreen):
             self.query_one("#plan-excluidos", Static).update("")
             return
         try:
+            contactos = inventory.contact_ids()
             self._plan = build_plan(
                 self._seleccion,
                 self._opciones(),
                 me_id=me,
                 whitelist=config.safety.whitelist,
-                contact_ids=inventory.contact_ids(),
+                contact_ids=contactos,
                 protect_contacts=config.safety.protect_contacts,
                 recent_private_days=config.safety.recent_private_days,
             )
         except ValueError as exc:
             # whitelist no parseable (defensa en profundidad: el validador de
             # config ya la rechaza al cargar): sin plan, visible, sin crash
-            # (4ª auditoría)
+            # (robustez)
             self._plan = None
             self.query_one("#tabla", DataTable).clear()
             self.query_one("#plan-contadores", Static).update(
@@ -178,15 +184,36 @@ class PlanScreen(BaseScreen):
                 "archivados pueden estar desactualizados — refresca (r) antes "
                 "de confirmar.[/]\n"
             )
+        aviso_contactos = ""
+        if config.safety.protect_contacts and not contactos:
+            # robustez: la meta ausente dejaba la protección de contactos
+            # apagada en silencio (caché de una versión vieja)
+            aviso_contactos = (
+                "[b yellow]⚠ protección de contactos INACTIVA: la caché no "
+                "tiene datos de contactos — refresca (r).[/]\n"
+            )
         self.query_one("#plan-contadores", Static).update(
             f"[b]{len(self._plan.peers)} peers · {self._plan.destructive_count()} "
             f"operaciones destructivas[/]\n{conteo or '—'}\n"
+            f"{aviso_contactos}"
             f"{aviso_caducada}"
             f"DRY-RUN: nada se ejecuta. Expira en {config.plan.ttl_min} min."
         )
-        excluidos = "\n".join(f"— {pid}: {razon}" for pid, razon in self._plan.excluded)
+        # blindados REALES vs "sin pasos aplicables" (robustez: el
+        # contador mezclado inflaba la señal)
+        blindados = [
+            (pid, razon)
+            for pid, razon in self._plan.excluded
+            if razon not in RAZONES_NO_APLICABLES
+        ]
+        sin_pasos = len(self._plan.excluded) - len(blindados)
+        excluidos = "\n".join(f"— {pid}: {razon}" for pid, razon in blindados)
+        titulo = f"[b]Excluidos: 🔒 {len(blindados)} blindados"
+        if sin_pasos:
+            titulo += f" · {sin_pasos} sin pasos aplicables"
+        titulo += "[/]"
         self.query_one("#plan-excluidos", Static).update(
-            f"[b]Excluidos ({len(self._plan.excluded)}):[/] 🔒\n{excluidos or '—'}"
+            f"{titulo}\n{excluidos or '—'}"
         )
 
     def action_volver(self) -> None:
@@ -196,7 +223,7 @@ class PlanScreen(BaseScreen):
         if not self._plan or not self._plan.peers:
             self.sentry_app.notify("el plan está vacío", severity="warning")
             return
-        # doble-click no apila dos confirmaciones (3ª auditoría, P3)
+        # doble-click no apila dos confirmaciones (robustez)
         if isinstance(self.app.screen, ConfirmScreen):
             return
         self.sentry_app.push_screen(ConfirmScreen(self._plan))

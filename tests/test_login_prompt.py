@@ -177,8 +177,8 @@ def test_connect_cliente_autorizado_niega_sin_sesion(monkeypatch, tmp_path: Path
 
 
 def test_connect_and_login_reintenta_2fa_sin_prompt_inyectado(monkeypatch) -> None:
-    """P2 3ª auditoría: el reintento de contraseña 2FA era CÓDIGO MUERTO en
-    CLI (`or password_prompt is None`): una contraseña incorrecta era error
+    """El reintento de contraseña 2FA no tenía efecto en CLI
+    (`or password_prompt is None`): una contraseña incorrecta era error
     sin segundas oportunidades. Con getpass (vía monkeypatch) reintenta."""
     import getpass
 
@@ -207,7 +207,7 @@ def test_connect_and_login_reintenta_2fa_sin_prompt_inyectado(monkeypatch) -> No
 
 
 def test_connect_and_login_traduce_floodwait_y_desconecta(monkeypatch) -> None:
-    """P2 3ª auditoría: el FloodWait al enviar código salía CRUDO de
+    """el FloodWait al enviar código salía CRUDO de
     connect_and_login y el CLI lo mostraba como traceback. Ahora sale como
     taxonomía FloodWait (con segundos) y el cliente queda desconectado."""
 

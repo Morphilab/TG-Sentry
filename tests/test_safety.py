@@ -83,7 +83,7 @@ def test_me_id_none_bloquea_todo_fail_closed() -> None:
 
 def test_contacto_exclusion_dura_no_aviso() -> None:
     """Los contactos son EXCLUSIÓN DURA con protect_contacts (config.example
-    lo promete; antes era un aviso sin fuente de contactos — placebo)."""
+    lo promete; antes era un aviso sin fuente de contactos — sin efecto real)."""
     base = dict(me_id=1, whitelist_ids=set(), whitelist_usernames=set())
     razones = hard_exclusions(
         _dialog(id=88), contact_ids={88}, protect_contacts=True, **base
@@ -134,9 +134,9 @@ def test_aviso_desactivable_por_dias_cero() -> None:
 
 
 def test_whitelist_id_malformado_se_rechaza_con_mensaje() -> None:
-    """P3 3ª auditoría: '--77' pasaba el chequeo isdigit y reventaba con
-    ValueError crudo de int() dentro de build_plan; ahora el mensaje dice qué
-    entrada es inválida (tratarla como username dejaría de proteger)."""
+    """'--77' pasaba el chequeo isdigit y fallaba con ValueError crudo de
+    int() dentro de build_plan; ahora el mensaje dice qué entrada es inválida
+    (tratarla como username dejaría de proteger)."""
     import pytest as _pytest
 
     with _pytest.raises(ValueError, match="--77"):
@@ -145,3 +145,38 @@ def test_whitelist_id_malformado_se_rechaza_con_mensaje() -> None:
     ids, usernames = parse_whitelist(["-77", "durov2"])
     assert -77 in ids and 77 in ids
     assert "durov2" in usernames
+
+
+def test_parse_whitelist_simetria_de_formas() -> None:
+    """una entrada en CUALQUIER forma protege las TRES (crudo
+    +n, grupo -n, canal -(n+MARCA)). Antes las formas marcadas añadían solo
+    algunas — huecos contra la filosofía "proteger de más, nunca de menos"."""
+    crudo = 12345
+    grupo = -12345
+    canal = -(12345 + 10**12)
+    for entrada in ("12345", "-12345", f"-{12345 + 10**12}"):
+        ids, _ = parse_whitelist([entrada])
+        assert crudo in ids, f"forma cruda desprotegida con entrada {entrada}"
+        assert grupo in ids, f"forma grupo desprotegida con entrada {entrada}"
+        assert canal in ids, f"forma canal desprotegida con entrada {entrada}"
+
+
+def test_whitelist_prefijo_mas_es_id() -> None:
+    """'+12345' caía al username MUERTO en silencio — el
+    usuario creía haber protegido un id y no había protección."""
+    ids, usernames = parse_whitelist(["+12345"])
+    assert 12345 in ids
+    assert usernames == set()
+    # ampara exactamente las mismas 3 formas que "12345"
+    assert ids == parse_whitelist(["12345"])[0]
+
+
+def test_whitelist_malformados_sigue_sin_ser_id() -> None:
+    """'+-77' no es un id (requiere solo dígitos tras el '+'): cae a
+    username, sin protección falsa. '--77' se RECHAZA como siempre."""
+    import pytest
+
+    _, usernames = parse_whitelist(["+-77"])
+    assert "+-77" in usernames
+    with pytest.raises(ValueError):
+        parse_whitelist(["--77"])

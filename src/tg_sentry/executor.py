@@ -17,8 +17,13 @@ Durante el paso:
   (los pasos quedan pendientes y reanudables).
 - Sesión revocada: terminal → abort inmediato (re-hacer login).
 - Resultados por paso → auditoría inmediata con estado contractual.
-- El TTL del plan se re-valida por CADA PEER: una corrida de horas con un
-  plan de 5 min no puede seguir operando bajo un plan formalmente vencido.
+- El TTL del plan se re-valida por cada PASO y tras cada espera de
+  presupuesto: una corrida de horas con un plan de 5 min no puede seguir
+  operando bajo un plan formalmente vencido.
+- Dependencia por peer (robustez): si un paso delete_own falla, los
+  pasos posteriores que destruyen el acceso (leave/delete_chat) se omiten
+  como failed — salir del chat eliminaría la ventana de reintento del
+  borrado de forma irreversible.
 
 Abort ≠ error: el estado persistente permite reanudar lo pendiente.
 `run()` NUNCA lanza por un fallo del entorno: un error de I/O en la
@@ -60,6 +65,19 @@ AfterStepFn = Callable[[int, StepKind, StepOutcome], None]
 # Pasos que borran hasta ~100 mensajes en un request interno: merecen
 # descanso propio entre pasos (el bucket solo controla 1 op/step).
 OWN_MESSAGE_STEPS = frozenset({StepKind.DELETE_OWN_FOR_ALL, StepKind.DELETE_OWN_FOR_ME})
+
+# Pasos que destruyen la ventana de borrado propio: tras un delete_own
+# fallido, ejecutarlos eliminaría para siempre la posibilidad de borrar los
+# mensajes (robustez: el LEAVE tras el delete condenado de un canal
+# procedía igual). BLOCK no está: es reversible y no quita el acceso.
+ACCESS_CUTTER_STEPS = frozenset(
+    {
+        StepKind.LEAVE,
+        StepKind.DELETE_CHAT,
+        StepKind.DELETE_CHAT_REVOKE,
+        StepKind.CLEAR_HISTORY,
+    }
+)
 
 GONE_TO_OUTCOME = {
     "not_participant": StepOutcome.SKIPPED_OK,
@@ -152,6 +170,9 @@ class ExecutionEngine:
             for step in peer.steps
             if (peer.dialog.id, step.kind.value) not in done_steps
         ]
+        # peers cuyo delete_own falló EN ESTA corrida: sus pasos que cortan
+        # el acceso se omiten (ver ACCESS_CUTTER_STEPS)
+        borrado_fallido: set[int] = set()
         try:
             for indice, (peer, step, es_borrado) in enumerate(tareas):
                 if plan.is_expired(self._now()):
@@ -163,29 +184,69 @@ class ExecutionEngine:
                         f"({len(tareas) - indice} pasos quedaban); "
                         "regenera el plan y reanuda"
                     )
-                while True:
-                    espera = self._espera_presupuesto(step.kind)
-                    if espera is None:
-                        break
-                    # visible también en CLI (el log es la única traza ahí);
-                    # la TUI anuncia lo mismo por su canal propio
-                    logger.info(
-                        "presupuesto anti-baneo lleno: esperando %.0fs antes "
-                        "de %s (ventana rodante)",
-                        espera,
-                        step.kind.value,
+                if step.kind in ACCESS_CUTTER_STEPS and peer.dialog.id in borrado_fallido:
+                    # robustez: ejecutar el leave/delete_chat tras un
+                    # delete_own fallido destruye IRREVERSIBLEMENTE la
+                    # ventana de reintento del borrado. Se omite SIN gastar
+                    # presupuesto ni token; queda failed (visible) y pasa a
+                    # runstate como procesado — no se reintenta solo.
+                    outcome = StepOutcome.FAILED
+                    reason: str | None = (
+                        "omitido: borrar propios falló antes y este paso "
+                        "destruiría la ventana de reintento; re-planifica "
+                        "(con 'all' o sin borrar propios)"
                     )
-                    await self._sleep_budget(espera)
-                await self._bucket.acquire(wait=self._sleep)
-                if plan.is_expired(self._now()):
-                    # el paso NO se ejecuta bajo un plan vencido: la espera de
-                    # presupuesto puede durar horas (tope 200/día) y el TTL es
-                    # la promesa de re-validación contra el estado remoto
-                    # (2ª auditoría: antes el último paso corría vencido igual)
+                    self._record(plan.plan_id, peer.dialog, step.kind, outcome, reason)
+                    self._bump(result, outcome)
+                    if after_step is not None:
+                        try:
+                            after_step(peer.dialog.id, step.kind, outcome)
+                        except Exception as exc:
+                            raise _AbortRun(
+                                f"persistencia tras el paso: {exc}"
+                            ) from exc
+                    continue
+                # presupuesto/bucket/TTL con el MISMO contrato de abort que
+                # el paso (robustez: audit.read() durante la espera podía
+                # lanzar un OSError exótico y reventar "run() nunca lanza")
+                try:
+                    while True:
+                        espera = self._espera_presupuesto(step.kind)
+                        if espera is None:
+                            break
+                        # visible también en CLI (el log es la única traza ahí);
+                        # la TUI anuncia lo mismo por su canal propio
+                        logger.info(
+                            "presupuesto anti-baneo lleno: esperando %.0fs antes "
+                            "de %s (ventana rodante)",
+                            espera,
+                            step.kind.value,
+                        )
+                        await self._sleep_budget(espera)
+                        if plan.is_expired(self._now()):
+                            # robustez: con el tope diario lleno el motor
+                            # dormía por tramos sin mirar el TTL; el abort
+                            # llegaba solo cuando el presupuesto se liberaba
+                            raise _AbortRun(
+                                "ttl: el plan venció durante la espera de "
+                                "presupuesto; regenera el plan y reanuda"
+                            )
+                    await self._bucket.acquire(wait=self._sleep)
+                    if plan.is_expired(self._now()):
+                        # el paso NO se ejecuta bajo un plan vencido: la espera de
+                        # presupuesto puede durar horas (tope 200/día) y el TTL es
+                        # la promesa de re-validación contra el estado remoto
+                        # (robustez: antes el último paso corría vencido igual)
+                        raise _AbortRun(
+                            "ttl: el plan venció durante la espera de presupuesto; "
+                            "regenera el plan y reanuda"
+                        )
+                except _AbortRun:
+                    raise
+                except Exception as exc:
                     raise _AbortRun(
-                        "ttl: el plan venció durante la espera de presupuesto; "
-                        "regenera el plan y reanuda"
-                    )
+                        f"persistencia antes del paso: {exc}"
+                    ) from exc
                 try:
                     outcome, reason, borrados = await self._execute_step(
                         peer, step.kind
@@ -203,33 +264,52 @@ class ExecutionEngine:
                 self._bump(result, outcome)
                 if borrados is not None:
                     result.messages_deleted += borrados
+                if es_borrado and outcome is StepOutcome.FAILED:
+                    # alimenta la regla de dependencia (ACCESS_CUTTER_STEPS):
+                    # los pasos que cortan el acceso de este peer se omiten
+                    borrado_fallido.add(peer.dialog.id)
                 if after_step is not None:
                     try:
                         after_step(peer.dialog.id, step.kind, outcome)
                     except Exception as exc:
                         # el paso YA está auditado; un fallo de persistencia
                         # del runstate/UX no puede romper el contrato
-                        # "run() nunca lanza" (auditoría 2026-09)
+                        # "run() nunca lanza" (robustez)
                         raise _AbortRun(
                             f"persistencia tras el paso: {exc}"
                         ) from exc
-                if es_borrado and outcome in (StepOutcome.DONE, StepOutcome.FAILED):
+                if es_borrado and (
+                    (borrados is not None and borrados > 0)
+                    or (
+                        borrados is None
+                        and outcome in (StepOutcome.DONE, StepOutcome.FAILED)
+                    )
+                ):
                     # Cooldown PROPORCIONAL a lo borrado (hallazgo M6.2: el
                     # fijo de 20 min castigaba igual a un grupo con 90
                     # mensajes y otro con 3). Presupuesto: 1 msg cada
                     # cooldown/100 segundos → ~300 msgs/h con el default.
                     # Piso 60s; sin conteo (borrados None), conservador
-                    # completo — TAMBIÉN en FAILED (2ª auditoría: un fallo
+                    # completo — TAMBIÉN en FAILED (robustez: un fallo
                     # sin conteo conocido dejó trabajo desconocido en el
-                    # servidor). Se OMITE si no se borró nada o si no queda
-                    # ningún paso de borrado por delante (cola muerta, M6.3).
-                    if borrados == 0:
-                        continue
+                    # servidor) y en SKIPPED_* con conteo (robustez: un
+                    # PeerGone a mitad del lote borró mensajes de verdad).
+                    # Se OMITE si no se borró nada (0 o None en skip sin
+                    # conteo) o si no queda ningún paso de borrado por
+                    # delante (cola muerta, M6.3).
                     quedan_borrados = any(
                         es for _, _, es in tareas[indice + 1 :]
                     )
                     cooldown = self._cooldown_por_borrado(borrados)
                     if cooldown > 0 and quedan_borrados:
+                        # robustez: en el CLI un cooldown de 20 min en
+                        # silencio era indistinguible de un cuelgue (la TUI
+                        # ya lo anunciaba por su canal)
+                        logger.info(
+                            "cooldown de borrado: %.0fs antes del siguiente "
+                            "paso (quedan pasos de borrado)",
+                            cooldown,
+                        )
                         await self._sleep(cooldown)
         except _AbortRun as abort:
             result.aborted = abort.reason
@@ -252,7 +332,6 @@ class ExecutionEngine:
         )
 
     # -- pasos -------------------------------------------------------------
-
     async def _execute_step(
         self, peer: PlannedPeer, step: StepKind
     ) -> tuple[StepOutcome, str | None, int | None]:
@@ -261,14 +340,14 @@ class ExecutionEngine:
         En fallos de pasos DELETE_OWN_* se recupera el conteo PARCIAL que la
         capa tg/ adjunta a la excepción (`tg_sentry_borrados_parciales`):
         trabajo destructivo ya hecho debe espaciarse aunque el ítem acabe
-        en failed (auditoría 2026-09).
+        en failed (robustez).
         """
         attempt = 0
         while True:
             try:
                 borrados = await self._gateway.run_step(step, peer.dialog)  # type: ignore[attr-defined]
                 # bool es int en Python: un gateway que devuelva True no
-                # audita msgs=True (3ª auditoría, nit)
+                # audita msgs=True (nit)
                 if not isinstance(borrados, int) or isinstance(borrados, bool):
                     borrados = None  # gateway que no reporta conteo
                 return StepOutcome.DONE, None, borrados
@@ -305,19 +384,31 @@ class ExecutionEngine:
                 continue
             except PeerGone as gone:
                 # .get con fallback FAILED: una razón nueva en errors.py sin
-                # actualizar el mapa no revienta run() (2ª auditoría)
+                # actualizar el mapa no revienta run() (robustez).
+                # Parciales (robustez): un PeerGone a mitad de un lote
+                # delete_own dejó mensajes BORRADOS en el servidor — el
+                # conteo viaja a auditoría (msgs=N) para el sobre y el
+                # cooldown, como ya hacían RpcFailure y el catch-all.
                 return GONE_TO_OUTCOME.get(gone.reason, StepOutcome.FAILED), (
                     gone.reason
-                ), None
+                ), self._borrados_parciales(gone)
             except AdminRequired as exc:
-                return StepOutcome.FAILED, f"admin_required: {exc}", None
+                return (
+                    StepOutcome.FAILED,
+                    f"admin_required: {exc}",
+                    self._borrados_parciales(exc),
+                )
             except UnsupportedStep as exc:
-                return StepOutcome.FAILED, str(exc), None
+                # 0, no None: el guard rechaza ANTES de iterar/borrar — no hay
+                # trabajo en el servidor. None dispararía el cooldown
+                # conservador completo (20 min muertos por paso condenado —
+                # robustez).
+                return StepOutcome.FAILED, str(exc), 0
             except SessionInvalid as exc:
                 # sesión revocada en el servidor: TERMINAL — reintentar solo
-                # quemaría el presupuesto de cada ítem restante (auditoría
-                # 2026-09: antes caía a RpcFailure y quemaba 5 reintentos x
-                # ítem). La cola aborta; el camino es re-hacer login.
+                # quemaría el presupuesto de cada ítem restante (robustez:
+                # antes caía a RpcFailure y quemaba 5 reintentos x ítem).
+                # La cola aborta; el camino es re-hacer login.
                 raise _AbortRun(f"sesión inválida: re-haz login ({exc})") from exc
             except Exception as exc:
                 # Un bug inesperado NO tira la corrida: el paso queda failed
@@ -335,8 +426,8 @@ class ExecutionEngine:
     def _borrados_parciales(exc: BaseException) -> int | None:
         # el conteo parcial viaja adjunto a la EXCEPCIÓN ORIGINAL de Telethon;
         # la traducción de tg/ops.py la re-lanza con `from` — se recorre la
-        # cadena __cause__/__context__ (2ª auditoría: en producción el
-        # atributo moría en la traducción y el cooldown era código muerto)
+        # cadena __cause__/__context__ (en producción el atributo se perdía
+        # en la traducción y el cooldown no tenía efecto)
         actual: BaseException | None = exc
         vistas: set[int] = set()
         while actual is not None and id(actual) not in vistas:
@@ -352,7 +443,6 @@ class ExecutionEngine:
     # viejo DENTRO de la ventana salga de ella (ventana rodante): el sobre
     # de seguridad se mantiene idéntico (jamás >50/h ni >200/d), pero los
     # trabajos grandes corren desatendidos en vez de abortar cada hora.
-
     def _espera_presupuesto(self, step: StepKind) -> float | None:
         """Segundos hasta que haya presupuesto para este paso; None = hay."""
         hechos = [
@@ -377,7 +467,7 @@ class ExecutionEngine:
             StepKind.LEAVE: self._limits.leave_per_hour,
             StepKind.BLOCK: self._limits.block_per_hour,
             # el cap de mensajes (config) gobierna los pasos que borran
-            # mensajes: antes era config muerta (auditoría 2026-09)
+            # mensajes: antes era config muerta (robustez)
             StepKind.DELETE_OWN_FOR_ALL: self._limits.delete_messages_per_hour,
             StepKind.DELETE_OWN_FOR_ME: self._limits.delete_messages_per_hour,
         }
@@ -408,18 +498,19 @@ class ExecutionEngine:
 
     @staticmethod
     def _trabajo_real(r: AuditRecord) -> bool:
-        """DONE cuenta siempre; FAILED solo si dejó trabajo parcial en el
-        servidor (el conteo viaja en reason como `msgs=N`, N>0 — 2ª auditoría:
-        un delete_own que borró 100 y falló contaba 0 para el sobre)."""
+        """DONE cuenta siempre; el resto solo si dejó trabajo real en el
+        servidor (el conteo viaja en reason como `msgs=N`, N>0 — robustez:
+        un delete_own que borró 100 y falló contaba 0 para el sobre). 6ª
+        auditoría: también los SKIPPED_* con conteo — un PeerGone a mitad del
+        lote BORRÓ mensajes de verdad y el sobre debe contarlo."""
         if r.outcome is StepOutcome.DONE:
             return True
-        if r.outcome is not StepOutcome.FAILED or not r.reason:
+        if not r.reason:
             return False
         m = re.search(r"msgs=(\d+)", r.reason)
         return bool(m and int(m.group(1)) > 0)
 
     # -- auditoría ----------------------------------------------------------
-
     def _record(
         self,
         plan_id: str,

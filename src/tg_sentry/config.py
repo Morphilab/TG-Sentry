@@ -40,6 +40,9 @@ phone = ""                  # teléfono con prefijo de país, ej. "+34600000000"
 # Acepta ids numéricos (ej. 123456789) y usernames (ej. "durov").
 whitelist = []
 # No tocar chats privados de contactos — EXCLUSIÓN DURA por defecto.
+# Requiere una caché refrescada por esta versión (guarda tus contactos):
+# si la caché es de una versión vieja, la protección queda INACTIVA y
+# plan/apply te avisan (refresca con dialogs --refresh).
 # false = desactiva la protección de contactos (decisión explícita tuya).
 protect_contacts = true
 # Aviso informativo: chats privados con actividad más reciente que N días
@@ -57,7 +60,8 @@ block_per_hour = 50
 delete_messages_per_hour = 100
 # NOTA: los topes duros de sesión (50 destructivas/hora, 200/día) NO son
 # configurables — son constantes del código por diseño.
-# FloodWait mayor que este umbral pausa la cola (reanudación visible en TUI).
+# FloodWait mayor que este umbral ABORTA la cola (reanudación manual con
+# el mismo comando; lo hecho queda auditado y lo pendiente reanudable).
 floodwait_pause_threshold_s = 300
 # Segundo FloodWait dentro de esta ventana → pausa indefinida + aviso.
 floodwait_pattern_window_s = 300
@@ -70,7 +74,9 @@ floodwait_pattern_window_s = 300
 own_messages_cooldown_s = 1200
 
 [plan]
-# Re-validación del plan contra estado remoto antes de ejecutar.
+# Caducidad del plan (minutos desde que se genera). La re-validación es
+# LOCAL: reloj del plan + frescura de la caché; los cambios en Telegram
+# (peer desaparecido, permisos) se descubren AL EJECUTAR cada paso.
 ttl_min = 5
 
 [cache]
@@ -253,12 +259,15 @@ def save_config(config: Config, path: Path | None = None) -> Path:
     # de write_text dejaba además un TOML truncado
     payload = tomlkit.dumps(doc)
     tmp = file.with_suffix(f".tmp-{os.getpid()}")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
     tmp.replace(file)
+    # fsync del dir tras el replace (5ª auditoría, paridad con runstate):
+    # sin él, un corte de luz justo tras guardar podía revertir el rename
+    paths.fsync_dir(file.parent)
     file.chmod(0o600)
     return file
 

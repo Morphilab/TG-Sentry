@@ -69,7 +69,7 @@ def ensure_private_dir(path: Path) -> Path:
         missing.append(probe)
         probe = probe.parent
     for directory in reversed(missing):
-        # exist_ok: CLI + TUI en primera ejecución concurrente (2ª auditoría)
+        # exist_ok: CLI + TUI en primera ejecución concurrente (robustez)
         directory.mkdir(exist_ok=True)
         directory.chmod(0o700)
     if path.exists() and stat.S_IMODE(path.stat().st_mode) != 0o700:

@@ -14,7 +14,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Button, Footer, Header, Input, Label, Static
 
-from tg_sentry.planner import ActionPlan
+from tg_sentry.planner import RAZONES_NO_APLICABLES, ActionPlan
 from tg_sentry.tui.base import BaseScreen
 from tg_sentry.tui.screens.dashboard import KIND_LABELS
 
@@ -38,6 +38,15 @@ class ConfirmScreen(BaseScreen):
         super().__init__()
         self._plan = plan
 
+    def on_mount(self) -> None:
+        # el TTL se consume mientras se decide: el aviso se re-renderiza
+        # cada 2s (robustez: el snapshot estático seguía diciendo
+        # "5 min" cuando quedaban segundos)
+        self.set_interval(2.0, self._refrescar_ttl)
+
+    def _refrescar_ttl(self) -> None:
+        self.query_one("#aviso", Static).update(AVISO.format(ttl=self._restante_legible()))
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         # VerticalScroll: si el contenido desborda, se scrollea — el campo y
@@ -60,16 +69,27 @@ class ConfirmScreen(BaseScreen):
                 por_tipo[etiqueta] = por_tipo.get(etiqueta, 0) + len(peer.steps)
             tipos = " · ".join(f"{n} {k}" for k, n in sorted(por_tipo.items()))
             yield Static(f"pasos por tipo: {tipos}", id="tipos")
-            excluidos = self._plan.excluded[:8]
-            lineas = "\n".join(f"— {pid}: {razon}" for pid, razon in excluidos)
+            # blindados REALES vs "sin pasos aplicables": el contador
+            # mezclado inflaba la señal de seguridad (robustez)
+            blindados = [
+                (pid, razon)
+                for pid, razon in self._plan.excluded
+                if razon not in RAZONES_NO_APLICABLES
+            ]
+            sin_pasos = len(self._plan.excluded) - len(blindados)
+            titulo = f"[b]🔒 NO se va a tocar ({len(blindados)} blindados)"
+            if sin_pasos:
+                titulo += f" · {sin_pasos} sin pasos aplicables[/]"
+            else:
+                titulo += "[/]"
+            lineas = "\n".join(f"— {pid}: {razon}" for pid, razon in blindados[:8])
             resto = (
-                f"\n… y {len(self._plan.excluded) - 8} más (🔒 blindados, fuera del plan)"
-                if len(self._plan.excluded) > 8
+                f"\n… y {len(blindados) - 8} blindados más (fuera del plan)"
+                if len(blindados) > 8
                 else ""
             )
             yield Static(
-                f"[b]🔒 NO se va a tocar ({len(self._plan.excluded)} blindados):[/]\n"
-                f"{lineas or '—'}{resto}",
+                f"{titulo}\n{lineas or '—'}{resto}",
                 id="excluidos",
             )
             yield Label("Teclea CONFIRMAR y pulsa Enter (o botón «Ejecutar»):")
@@ -102,7 +122,7 @@ class ConfirmScreen(BaseScreen):
     def _restante_legible(self) -> str:
         """TTL RESTANTE del plan (no el de config): quedarse mirando esta
         pantalla consume el TTL y antes se descubría solo tras CONFIRMAR
-        (2ª auditoría). restante_ttl() acota a 0: 0 = expirado."""
+        (robustez). restante_ttl() acota a 0: 0 = expirado."""
         restante = self._plan.restante_ttl()
         if restante.total_seconds() <= 0:
             return "expirado"

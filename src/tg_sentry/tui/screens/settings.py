@@ -26,7 +26,8 @@ from tg_sentry.tui.base import BaseScreen
 
 class SettingsScreen(BaseScreen):
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
-        # honesto: Escape NO guarda (antes la etiqueta mentía — auditoría 2026-09)
+        # honesto: Escape NO guarda (antes la etiqueta no reflejaba el
+        # comportamiento)
         ("escape", "volver", "volver (DESCARTA cambios)"),
     ]
 
@@ -43,7 +44,7 @@ class SettingsScreen(BaseScreen):
                 id="s-contacts",
             )
             yield Input(
-                placeholder="días de actividad reciente protegida (privados)",
+                placeholder="días de actividad reciente con AVISO en el plan (privados)",
                 value=str(safety.recent_private_days),
                 id="s-recent",
                 restrict=r"[0-9]*",
@@ -71,7 +72,7 @@ class SettingsScreen(BaseScreen):
 
     def _guardar(self) -> bool:
         """Guarda la config; False si falló (el fallo NUNCA tumba la TUI:
-        ValueError del número, OSError del save_config — 3ª auditoría)."""
+        ValueError del número, OSError del save_config — robustez)."""
         try:
             config = self.sentry_app.config
             recientes = self.query_one("#s-recent", Input).value.strip()
@@ -81,17 +82,27 @@ class SettingsScreen(BaseScreen):
                 if token.strip()
             ]
             # la whitelist se VALIDA aquí: una entrada malformada ("--77")
-            # guardada rompería el dashboard/plan al recargar (4ª auditoría)
+            # guardada rompería el dashboard/plan al recargar (robustez)
             from tg_sentry.safety import parse_whitelist
 
             parse_whitelist(whitelist)
-            config.safety.protect_contacts = self.query_one("#s-contacts", Checkbox).value
+            # se guarda sobre una COPIA y solo se asigna a la config viva si
+            # el save tiene éxito: un OSError (disco lleno) no puede dejar la
+            # sesión operando con valores que la UI reportó como "no guardado"
+            # (robustez — p. ej. una whitelist reducida sin persistir)
+            copia = config.model_copy(deep=True)
+            copia.safety.protect_contacts = self.query_one(
+                "#s-contacts", Checkbox
+            ).value
             # campo vacío = conserva el valor actual (no lo resetea a 30 en silencio)
-            config.safety.recent_private_days = (
+            copia.safety.recent_private_days = (
                 int(recientes) if recientes else config.safety.recent_private_days
             )
-            config.safety.whitelist = whitelist
-            save_config(config)
+            copia.safety.whitelist = whitelist
+            save_config(copia)
+            config.safety.protect_contacts = copia.safety.protect_contacts
+            config.safety.recent_private_days = copia.safety.recent_private_days
+            config.safety.whitelist = copia.safety.whitelist
         except (ValueError, OSError) as exc:
             self.query_one("#s-estado", Static).update(
                 f"[red]✗ no guardado: {type(exc).__name__}: {exc}[/]"
@@ -106,5 +117,5 @@ class SettingsScreen(BaseScreen):
 
     def action_volver(self) -> None:
         # pop (no switch): se abre con push desde el dashboard; conserva la
-        # selección viva del dashboard (3ª auditoría)
+        # selección viva del dashboard (robustez)
         self.sentry_app.pop_screen()

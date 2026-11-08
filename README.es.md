@@ -43,12 +43,17 @@ Monitor y limpiador de cuenta de Telegram — **seguro por diseño**.
     rechaza ahí, nunca se ejecuta un borrado con la promesa invertida.
     Con opción de NO salir del chat (limpiar y conservar).
 - **Seguro por diseño**: dry-run por defecto, peers blindados (tu cuenta,
-  Saved Messages, 777000, whitelist, chats secretos; la protección de
-  «donde eres creador» queda pendiente de verificar tu rol en cada chat y
-  hoy avisa «rol sin verificar»),
-  re-validación del plan (TTL 5 min), auditoría JSONL con rotación y export.
+  Saved Messages, 777000, whitelist; la protección de contactos es una
+  exclusión dura cuando la caché tiene datos de contactos — si faltan,
+  plan/apply avisan y la protección queda inactiva; los chats secretos ni
+  siquiera aparecen en el inventario — Telethon no los itera — y además
+  quedan excluidos; la protección de «donde eres creador» queda pendiente de
+  verificar tu rol en cada chat y hoy avisa «rol sin verificar»),
+  re-validación del plan (TTL local + frescura de caché, 5 min), auditoría
+  JSONL con rotación y export.
 - **Anti-baneo estructural**: token bucket (~4 ops/min, solo a la baja),
-  caps por tipo (30 salidas/h, 50 bloqueos/h), topes duros de sesión
+  caps por tipo (30 salidas/h, 50 bloqueos/h, 100 pasos de borrado/h),
+  topes duros de sesión
   (50 destructivas/h, 200/día — constantes de código), FloodWait respetado
   con prioridad absoluta (gracia 2× tras cada espera), pausa indefinida ante
   patrón de baneo (2º FloodWait <5 min), cooldown extra entre pasos de
@@ -72,7 +77,17 @@ Monitor y limpiador de cuenta de Telegram — **seguro por diseño**.
 
 ## Instalación
 
-Requiere Python ≥ 3.11.
+Requiere Python ≥ 3.11 (fijado a 3.11 en `.python-version`).
+
+Con [uv](https://docs.astral.sh/uv/) (recomendado — reproducible vía
+`uv.lock`, no necesita `venv`/`pip` del sistema):
+
+```bash
+uv sync --extra dev   # desarrollo; quita --extra dev para instalar sin extras
+uv run tg-sentry --help
+```
+
+Alternativa con pip puro (necesita que el módulo `venv` de tu Python funcione):
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate

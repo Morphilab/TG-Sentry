@@ -24,6 +24,16 @@ class AuditScreen(BaseScreen):
         ("f", "foco_filtro", "ir al filtro"),
     ]
 
+    def __init__(self) -> None:
+        super().__init__()
+        # instancia REUTILIZADA (robustez): la caché de lectura por
+        # huella de AuditLog es POR INSTANCIA — construir AuditLog() en
+        # cada consulta (cada tecla) la volvía inútil y el histórico
+        # completo de .gz se re-parseaba SIEMPRE, no solo con escritura
+        # concurrente. La huella invalida sola ante un record() de
+        # cualquier proceso.
+        self._audit_log = AuditLog()
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         with Vertical(id="audit-caja"):
@@ -51,7 +61,7 @@ class AuditScreen(BaseScreen):
 
     def _registros(self):  # type: ignore[no-untyped-def]
 
-        registros = AuditLog().read()
+        registros = self._audit_log.read()
         outcome = self.query_one("#a-outcome", Select).value
         if outcome:
             registros = [r for r in registros if r.outcome.value == outcome]
@@ -80,8 +90,10 @@ class AuditScreen(BaseScreen):
         )
         tabla = self.query_one("#tabla", DataTable)
         tabla.clear()
-        # la tabla muestra los últimos 300 (el resumen cuenta TODO);
-        # el re-parseo completo por tecla es deuda conocida (2ª auditoría)
+        # la tabla muestra los últimos 300 (el resumen cuenta TODO); el
+        # re-parseo por tecla queda acotado por la caché por huella de la
+        # instancia reutilizada (robustez — el resto de la deuda de
+        # perf vive en el motor)
         for r in registros[-300:]:
             color = (
                 "green"
@@ -116,12 +128,17 @@ class AuditScreen(BaseScreen):
             from tg_sentry.__main__ import _export_audit
 
             registros = self._registros()
-            destino = paths.exports_dir() / f"auditoria-{datetime.now(UTC):%Y%m%d-%H%M%S}.csv"
+            # -f como en el CLI (export.py): dos exports en el mismo segundo
+            # se truncaban entre sí en silencio (O_TRUNC) — robustez
+            destino = (
+                paths.exports_dir()
+                / f"auditoria-{datetime.now(UTC):%Y%m%d-%H%M%S-%f}.csv"
+            )
             paths.ensure_private_dir(destino.parent)
             _export_audit(registros, destino, "csv")
         except Exception as exc:
             # un fallo de disco/permisos en un handler NO tumba la TUI
-            # (mismo estándar que el refresh del dashboard — 3ª auditoría)
+            # (mismo estándar que el refresh del dashboard — robustez)
             self.sentry_app.notify(
                 f"export falló: {type(exc).__name__}: {exc}", severity="error"
             )
@@ -136,5 +153,5 @@ class AuditScreen(BaseScreen):
 
     def action_volver(self) -> None:
         # pop (no switch): esta pantalla se ABRE con push desde el dashboard;
-        # pop restaura la instancia viva y conserva su selección (3ª auditoría)
+        # pop restaura la instancia viva y conserva su selección (robustez)
         self.sentry_app.pop_screen()

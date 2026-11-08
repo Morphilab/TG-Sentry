@@ -67,7 +67,7 @@ class RedactingFilter(logging.Filter):
         if record.exc_info:
             # el traceback se formatea DESPUÉS por el Formatter, sin pasar por
             # ningún filter: mensajes de excepción con datos de usuario
-            # (str(exc)) escapaban sin redactar (2ª auditoría). Se pre-formatea,
+            # (str(exc)) escapaban sin redactar (robustez). Se pre-formatea,
             # redacta y fija como exc_text.
             exc_text = logging.Formatter().formatException(record.exc_info)
             record.exc_text = self._registry.redact(exc_text)

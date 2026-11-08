@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.fakes import FakeSessionClient
 from tests.test_inventory import _to_infos
 from tg_sentry import inventory
-from tg_sentry.audit import AuditRecord, StepOutcome
+from tg_sentry.audit import AuditLog, AuditRecord, StepOutcome
 from tg_sentry.config import Config, save_config
 from tg_sentry.executor import RunResult
 from tg_sentry.models import DialogInfo, PeerKind
@@ -89,7 +90,7 @@ class _FakeRuntime:
 
 class _FakeApp(SentryApp):
     async def get_client(self):  # type: ignore[no-untyped-def]
-        return object()
+        return FakeSessionClient(me_id=42)
 
     @property
     def runtime(self):  # type: ignore[no-untyped-def]
@@ -207,7 +208,7 @@ async def test_eta_incluye_cooldowns_estimados(entorno: Path, monkeypatch) -> No
 
     class _App(SentryApp):
         async def get_client(self):  # type: ignore[no-untyped-def]
-            return object()
+            return FakeSessionClient(me_id=42)
 
         @property
         def runtime(self):  # type: ignore[no-untyped-def]
@@ -255,7 +256,7 @@ async def test_eta_incluye_cooldowns_estimados(entorno: Path, monkeypatch) -> No
 async def test_tecla_e_sobre_ejecucion_terminada_no_relanza(
     entorno: Path, app_con_motor_falso
 ) -> None:
-    """P1: 'e' es una vista. Sobre un plan fin/abortado ADJUNTA (mismo objeto,
+    """'e' es una vista. Sobre un plan fin/abortado ADJUNTA (mismo objeto,
     resultado preservado), jamás crea una ejecución nueva sin CONFIRMAR."""
     app = app_con_motor_falso()
     async with app.run_test(size=(120, 40)) as pilot:
@@ -280,7 +281,7 @@ async def test_tecla_e_sobre_ejecucion_terminada_no_relanza(
 
 
 async def test_iniciar_con_limites_subidos_se_niega(entorno: Path, monkeypatch) -> None:
-    """P2: la TUI aplica validate_policy (mismo gate que el CLI)."""
+    """la TUI aplica validate_policy (mismo gate que el CLI)."""
     from tg_sentry.config import load_config
 
     cfg = load_config()
@@ -300,7 +301,7 @@ async def test_iniciar_con_limites_subidos_se_niega(entorno: Path, monkeypatch) 
 
 
 async def test_iniciar_sin_me_id_no_arranca(entorno: Path, monkeypatch) -> None:
-    """P1: sin identidad en la caché, la ejecución se niega (fail-closed)."""
+    """sin identidad en la caché, la ejecución se niega (fail-closed)."""
     import sqlite3
 
     from tg_sentry import paths as app_paths
@@ -326,7 +327,7 @@ async def test_iniciar_sin_me_id_no_arranca(entorno: Path, monkeypatch) -> None:
 
 
 async def test_refresh_fallido_no_mata_la_tui(entorno: Path, monkeypatch) -> None:
-    """P2: un error de red/RPC en el refresh deja la app viva con un aviso."""
+    """un error de red/RPC en el refresh deja la app viva con un aviso."""
     from tg_sentry.tg.client import SesionNoAutorizada
 
     async def _roto(self):  # type: ignore[no-untyped-def]
@@ -343,7 +344,7 @@ async def test_refresh_fallido_no_mata_la_tui(entorno: Path, monkeypatch) -> Non
 
 
 async def test_seleccion_sobrevive_al_refresh(entorno: Path) -> None:
-    """P3: refrescar la caché NO borra la selección del usuario."""
+    """refrescar la caché NO borra la selección del usuario."""
     app = _FakeApp()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.3)  # asienta el filtrado inicial (worker en hilo)
@@ -360,11 +361,10 @@ async def test_seleccion_sobrevive_al_refresh(entorno: Path) -> None:
 
 
 def test_salida_de_la_app_desconecta_cliente_y_cancela_ejecucion() -> None:
-    """2ª auditoría P1: on_unmount + call_later era código muerto (la cola de
-    mensajes ya está cerrada al llegar el Unmount) — el cliente Telethon
-    JAMÁS se desconectaba al salir y la ejecución moría sin auditar su
-    estado. on_exit_app debe: cancelar la tarea, desconectar y parar el
-    runtime."""
+    """on_unmount + call_later no se ejecutaba (la cola de mensajes ya está
+    cerrada al llegar el Unmount) — el cliente Telethon no se desconectaba al
+    salir y la ejecución moría sin auditar su estado. on_exit_app debe:
+    cancelar la tarea, desconectar y parar el runtime."""
     import asyncio as _asyncio
 
     from tg_sentry.tui.app import SentryApp
@@ -412,7 +412,7 @@ def test_salida_de_la_app_desconecta_cliente_y_cancela_ejecucion() -> None:
 async def test_segundo_plan_confirmado_arranca_tras_ejecucion_terminada(
     entorno: Path, app_con_motor_falso
 ) -> None:
-    """P1 3ª auditoría: una ejecución terminada NO bloquea el siguiente plan
+    """una ejecución terminada NO bloquea el siguiente plan
     en la misma sesión. ExecuteScreen con un plan NUEVO (recién confirmado)
     arranca su ejecución; la tecla 'e' (mismo plan) solo adjunta."""
     app = app_con_motor_falso()
@@ -444,7 +444,7 @@ async def test_segundo_plan_confirmado_arranca_tras_ejecucion_terminada(
 async def test_iniciar_con_inventario_corrupto_entra_en_error(
     entorno: Path, app_con_motor_falso, monkeypatch
 ) -> None:
-    """P2 3ª auditoría: CacheIncompatible en la re-validación de blindados →
+    """CacheIncompatible en la re-validación de blindados →
     la ejecución entra en estado 'error' visible, jamás crash del handler."""
     from tg_sentry.inventory import CacheIncompatible
 
@@ -464,3 +464,34 @@ async def test_iniciar_con_inventario_corrupto_entra_en_error(
         e = app.iniciar_ejecucion(plan)
         assert e.estado == "error"
         assert "corrupto" in e.mensaje
+
+
+async def test_identidad_viva_distinta_rechaza_ejecucion(
+    entorno: Path, app_con_motor_falso
+) -> None:
+    """el plan y el me_id de la caché salían de la MISMA
+    DB — con un swap de sesión ambas capas coincidían y el plan de la
+    cuenta A se ejecutaba contra la cuenta B. Ahora la identidad se
+    verifica contra la sesión VIVA (get_me) al arrancar. Este test
+    reproduce el escenario exacto: caché y plan dicen 999 (pasan las
+    re-validaciones de siempre), la sesión conectada es la 42."""
+    app = app_con_motor_falso()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        # swap: la caché ahora "es" la cuenta 999 (coincide con el plan)
+        inventory.store(_to_infos(), inventory.db_path(), me_id=999)
+        plan = build_plan(
+            [DialogInfo(id=500, kind=PeerKind.BOT, name="b")],
+            PlannerOptions(),
+            me_id=999,  # coincide con la caché → blindados pasa…
+        )
+        e = app.iniciar_ejecucion(plan)
+        for _ in range(20):
+            await pilot.pause(0.1)
+            if e.estado == "error":
+                break
+        assert e.estado == "error"
+        # …pero la sesión VIVA (FakeSessionClient=42) NO es la cuenta 999
+        assert "NO es la cuenta del plan" in e.mensaje
+        # el motor JAMÁS arrancó: nada auditado
+        assert AuditLog().read() == []

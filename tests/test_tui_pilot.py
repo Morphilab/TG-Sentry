@@ -201,3 +201,37 @@ async def test_execute_plan_expirado_mensaje_claro(entorno: Path, monkeypatch) -
 # de timing de los workers `exclusive` de Textual en run_test (una coroutine
 # reemplazada antes de arrancar se cierra sin await). Inocuo y solo de test;
 # en producción el guard is_mounted cubre el desmontaje real.
+
+
+async def test_login_password_invalid_mensaje_claro(entorno: Path, monkeypatch) -> None:
+    """str(PasswordInvalid) es "" — el catch genérico
+    mostraba literalmente "Error: " a secas. Ahora el mensaje dice qué
+    falló y que se puede reintentar."""
+    from tg_sentry.tg.client import PasswordInvalid
+    from tg_sentry.tui.screens.login import LoginScreen
+
+    app = SentryApp()
+
+    async def _call(_self, coro):  # type: ignore[no-untyped-def]
+        coro.close()  # el raise no la consume: sin "coroutine never awaited"
+        raise PasswordInvalid
+
+    monkeypatch.setattr(SentryApp, "telethon_call", _call)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(LoginScreen())
+        await pilot.pause()
+        pantalla = app.screen
+        assert isinstance(pantalla, LoginScreen)
+        pantalla._client = object()  # como si ya hubiera conectado
+        pantalla._phone = "+10000000000"
+        from textual.widgets import Input
+
+        pantalla.query_one("#codigo", Input).value = "12345"
+        await pilot.pause()
+        await pilot.click("#entrar")
+        for _ in range(10):
+            await pilot.pause(0.1)
+            if "Contraseña 2FA" in str(pantalla.query_one("#estado").render()):
+                break
+        assert "Contraseña 2FA incorrecta" in str(pantalla.query_one("#estado").render())

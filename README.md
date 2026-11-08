@@ -43,12 +43,17 @@ Monitor and cleaner for your own Telegram account — **safe by design**.
     rejected there — a deletion is never executed with the promise reversed.
     With the option to NOT leave the chat (clean and keep it).
 - **Safe by design**: dry-run by default, protected peers (your own account,
-  Saved Messages, 777000, whitelist, secret chats; the "where you are the
-  creator" protection is pending per-chat role verification and currently
-  warns "role unverified"), plan re-validation (5 min TTL), JSONL audit log
-  with rotation and export.
+  Saved Messages, 777000, whitelist; contact protection is a hard exclusion
+  when the cache has contact data — if that data is missing, plan/apply warn
+  and the protection stays inactive; secret chats never appear in the
+  inventory — Telethon doesn't iterate them — and are excluded anyway; the
+  "where you are the creator" protection is pending per-chat role
+  verification and currently warns "role unverified"), plan re-validation
+  (local TTL + cache freshness, 5 min), JSONL audit log with rotation and
+  export.
 - **Structural anti-ban**: token bucket (~4 ops/min, lower-bound only),
-  per-type caps (30 leaves/h, 50 blocks/h), hard session caps (50 destructive
+  per-type caps (30 leaves/h, 50 blocks/h, 100 delete-steps/h), hard session
+  caps (50 destructive
   ops/h, 200/day — code constants), FloodWait respected with absolute
   priority (2× grace after every wait), indefinite pause on a ban pattern
   (2nd FloodWait <5 min), extra cooldown between mass message-deletion steps.
@@ -71,7 +76,17 @@ Monitor and cleaner for your own Telegram account — **safe by design**.
 
 ## Installation
 
-Requires Python ≥ 3.11.
+Requires Python ≥ 3.11 (pinned to 3.11 in `.python-version`).
+
+With [uv](https://docs.astral.sh/uv/) (recommended — reproducible via
+`uv.lock`, no system `venv`/`pip` needed):
+
+```bash
+uv sync --extra dev   # development; drop --extra dev for a plain install
+uv run tg-sentry --help
+```
+
+Fallback with plain pip (needs a working `venv` module for your Python):
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate

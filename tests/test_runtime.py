@@ -141,7 +141,7 @@ def test_runtime_shutdown_no_cierra_loop_atascado() -> None:
 
 
 def test_call_con_hilo_muerto_tras_el_check_no_cuelga(monkeypatch) -> None:
-    """2ª auditoría (TOCTOU): el hilo puede morir ENTRE el check y el
+    """El hilo puede morir ENTRE el check y el
     run_coroutine_threadsafe — el futuro jamás resuelve. Con el techo de
     llamada, call() falla ALTO en vez de colgar eternamente."""
     import asyncio as _asyncio

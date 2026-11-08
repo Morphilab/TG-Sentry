@@ -1,8 +1,7 @@
 # ============================================================
 # tg-sentry — .gitignore (se comparte)
 # Solo reglas públicas/compartidas: lo interno del proyecto
-# (AGENTS.md, dev/, .zcode/, .vscode/) vive en .git/info/exclude,
-# que es local y nunca se publica.
+# vive en el exclude local, que no se publica.
 # ============================================================
 
 # Python
@@ -22,6 +21,12 @@ config.toml
 logs/
 audit/
 exports/
+runs/
+inventory.db
+audit.jsonl
+plan*.json
+export.csv
+export.json
 coverage.json
 .coverage
 htmlcov/

@@ -63,7 +63,7 @@ def _connect(db: Path | None = None) -> sqlite3.Connection:
     paths.ensure_private_dir(file.parent)
     if not file.exists():
         # nace 0600 desde la creación: los paths de LECTURA creaban la DB con
-        # permisos de umask y sin chmod (auditoría 2026-09)
+        # permisos de umask y sin chmod (robustez)
         import os
 
         os.close(os.open(file, os.O_WRONLY | os.O_CREAT, 0o600))
@@ -130,7 +130,7 @@ def store(
 def _lectura(proteccion: str, consulta: str, db: Path | None, params: tuple = ()) -> list:
     """Lectura tolerante: una DB corrupta (no SQLite, disco dañado) levanta
     CacheIncompatible con mensaje accionable — antes reventaba con traceback
-    crudo y mataba la TUI en el arranque (2ª auditoría)."""
+    crudo y mataba la TUI en el arranque (robustez)."""
     try:
         conn = _connect(db)  # executescript del schema estalla aquí si hay basura
         try:
@@ -148,7 +148,7 @@ def load(db: Path | None = None) -> list[DialogInfo]:
     """Devuelve la caché completa en el orden del último fetch.
 
     Una DB de otra versión (enums distintos) NO se traga en silencio:
-    CacheIncompatible con instrucción clara (auditoría 2026-09).
+    CacheIncompatible con instrucción clara (robustez).
     """
     rows = _lectura(
         "load",
@@ -187,7 +187,7 @@ def _role_from_db(value: str):  # type: ignore[no-untyped-def]
 
 def _dt_aware(raw: str | None) -> datetime | None:
     """fromisoformat + normalización naive→UTC: los filtros de inactividad
-    comparan contra now(UTC) y naive≥aware era TypeError (2ª auditoría)."""
+    comparan contra now(UTC) y naive≥aware era TypeError (robustez)."""
     if not raw:
         return None
     stamp = datetime.fromisoformat(raw)
@@ -204,7 +204,7 @@ def me_id(db: Path | None = None) -> int | None:
         return int(valor)
     except ValueError:
         # meta corrupta: None → el CLI/TUI tratan el plan como fail-closed con
-        # mensaje accionable en vez de reventar con traceback (2ª auditoría)
+        # mensaje accionable en vez de reventar con traceback (robustez)
         logger.warning("meta me_id corrupta (%r): se ignora (refresca)", valor)
         return None
 
@@ -215,6 +215,14 @@ def contact_ids(db: Path | None = None) -> set[int]:
         "contact_ids", "SELECT value FROM meta WHERE key = 'contact_ids'", db
     )
     if not rows:
+        # meta AUSENTE (caché previa a la feature): la protección de contactos
+        # queda INACTIVA en silencio — el docstring de ops promete que jamás
+        # degrada sin aviso, y esta rama era la excepción (robustez)
+        logger.warning(
+            "caché sin meta contact_ids (¿refrescaste con una versión "
+            "vieja?): protección de contactos INACTIVA — ejecuta "
+            "tg-sentry dialogs --refresh"
+        )
         return set()
     try:
         parsed = json.loads(rows[0][0])
@@ -229,7 +237,7 @@ def contact_ids(db: Path | None = None) -> set[int]:
     except (ValueError, TypeError):
         # JSON válido de forma incorrecta (["a","b"], {"1":2}) devolvía un set
         # de strings sin aviso → la protección dura de contactos dejaba de
-        # matchear en silencio (2ª auditoría). Vacío con warning: visible.
+        # matchear en silencio (robustez). Vacío con warning: visible.
         logger.warning("meta contact_ids corrupta: se ignora (refresca para regenerar)")
         return set()
 
@@ -245,10 +253,10 @@ def fetched_at(db: Path | None = None) -> datetime | None:
     except (ValueError, TypeError) as exc:
         # meta corrupta (edición manual, escritura a medias): mismo contrato
         # que me_id/contact_ids — CacheIncompatible visible, nunca traceback
-        # crudo en cache_age/is_stale (3ª auditoría)
+        # crudo en cache_age/is_stale (robustez)
         raise CacheIncompatible(f"meta fetched_at no es una fecha: {exc}") from exc
     if stamp.tzinfo is None:
-        # cache_age resta contra now(UTC): naive era TypeError (2ª auditoría)
+        # cache_age resta contra now(UTC): naive era TypeError (robustez)
         stamp = stamp.replace(tzinfo=UTC)
     return stamp
 
@@ -282,9 +290,9 @@ async def refresh(
     """Fetch completo de todos los diálogos → reemplaza la caché. Solo lectura.
 
     FAIL-CLOSED: si no se puede determinar el id de la propia cuenta, la caché
-    NO se escribe (un inventario sin me_id no puede blindar nada — auditoría
-    2026-09). Los contactos se guardan también: safety los usa como protección
-    dura de chats privados.
+    NO se escribe (un inventario sin me_id no puede blindar nada). Los
+    contactos se guardan también: safety los usa como protección dura de
+    chats privados.
     """
     collected: list[DialogInfo] = []
     sin_id = 0

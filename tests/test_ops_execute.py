@@ -232,7 +232,7 @@ class _MsgFake:
 
 
 def test_authkey_duplicada_es_sesion_invalida_terminal() -> None:
-    """2ª auditoría: caía a RpcFailure y quemaba 5 reintentos por ítem con
+    """caía a RpcFailure y quemaba 5 reintentos por ítem con
     la sesión rota; ahora es terminal."""
     async def run() -> None:
         client = FakeClient(AuthKeyDuplicatedError(request=None))
@@ -243,7 +243,7 @@ def test_authkey_duplicada_es_sesion_invalida_terminal() -> None:
 
 
 def test_invalid_buffer_error_se_traduce() -> None:
-    """2ª auditoría: no hereda de RPCError/OSError — salía cruda y el motor
+    """no hereda de RPCError/OSError — salía cruda y el motor
     la tomaba por bug sin reintentos."""
     async def run() -> None:
         client = FakeClient(InvalidBufferError(b"payload"))
@@ -254,7 +254,7 @@ def test_invalid_buffer_error_se_traduce() -> None:
 
 
 def test_valueerror_ajeno_a_resolucion_es_rpcfailure() -> None:
-    """2ª auditoría: un ValueError de bug se tragaba como peer inválido
+    """un ValueError de bug se tragaba como peer inválido
     (skipped_unreachable, bug invisible); ahora es fallo de ítem visible."""
     async def run() -> None:
         client = FakeClient(ValueError("parse roto"))
@@ -265,9 +265,8 @@ def test_valueerror_ajeno_a_resolucion_es_rpcfailure() -> None:
 
 
 def test_borrados_parciales_sobrevive_la_traduccion() -> None:
-    """2ª auditoría P1: el conteo parcial viaja adjunto a la excepción
-    ORIGINAL de Telethon; sin copiarlo a la traducida, el cooldown
-    proporcional era código muerto en producción."""
+    """El conteo parcial viaja adjunto a la excepción ORIGINAL de Telethon;
+    sin copiarlo a la traducida, el cooldown proporcional no tiene efecto."""
     async def run() -> None:
         exc = RPCError(None, "boom", 500)
         client = _OwnClientFalla(exc)
@@ -284,8 +283,8 @@ def test_borrados_parciales_sobrevive_la_traduccion() -> None:
 
 
 def test_frozen_method_sin_seconds_es_admin_required() -> None:
-    """P3 auditoría 3: FrozenMethodInvalidError (cuenta congelada) es el único
-    FloodError SIN .seconds — int(exc.seconds) reventaba con AttributeError y
+    """FrozenMethodInvalidError (cuenta congelada) es el único
+    FloodError SIN .seconds — int(exc.seconds) fallaba con AttributeError y
     el paso salía 'error inesperado'. Ahora mapea a AdminRequired (determinista,
     sin bucle caliente)."""
     from telethon.errors import FrozenMethodInvalidError

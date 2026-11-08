@@ -68,3 +68,26 @@ def sample_dialogs() -> list[FakeDialog]:
             dialog=FakeInnerDialog(FakeNotifySettings(mute_until=recent)),
         ),
     ]
+
+
+@dataclass
+class FakeMe:
+    """Resultado mínimo de get_me()."""
+
+    id: int
+
+
+class FakeSessionClient:
+    """Cliente mínimo con get_me: la app verifica la identidad VIVA de la
+    sesión contra el plan antes de ejecutar (6ª auditoría) — los fakes
+    replican la interfaz REAL que el código toca (lección reiterada: un
+    fake incompleto tapa el contrato)."""
+
+    def __init__(self, me_id: int = 42) -> None:
+        self.me_id = me_id
+
+    async def get_me(self) -> FakeMe:
+        return FakeMe(id=self.me_id)
+
+    async def disconnect(self) -> None:
+        return None

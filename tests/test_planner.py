@@ -90,7 +90,7 @@ def test_contadores_destructivos() -> None:
 
 
 def test_leave_false_en_usuario_sin_borrado_propio_excluye() -> None:
-    """P1: --no-leave sin delete_own NO puede borrar el chat privado igual."""
+    """--no-leave sin delete_own NO puede borrar el chat privado igual."""
     user = [d for d in _to_infos() if d.kind is PeerKind.USER]
     plan = build_plan(user, _options(leave=False), me_id=1)
     assert plan.peers == []  # nada aplicable → excluido, jamás delete_chat
@@ -98,7 +98,7 @@ def test_leave_false_en_usuario_sin_borrado_propio_excluye() -> None:
 
 
 def test_leave_false_en_bot_excluye() -> None:
-    """P1: leave=False en bots se respeta (antes: delete_chat igual)."""
+    """leave=False en bots se respeta (antes: delete_chat igual)."""
     bot = [d for d in _to_infos() if d.kind is PeerKind.BOT]
     plan = build_plan(bot, _options(leave=False), me_id=1)
     assert plan.peers == []
@@ -175,15 +175,18 @@ def test_blindados_en_plan_detecta_otra_identidad() -> None:
     assert hallados and "OTRA identidad" in hallados[0][1]
 
 
-def test_canal_respeta_delete_own_antes_de_salir() -> None:
-    """Regresión (auditoría 2026-09, P1): leave=True (default) jamás descarta
-    el paso de mensajes propios — salir sin borrar destruye la única ventana
-    para borrarlos (quien abandona ya no puede borrar nada del canal)."""
+def test_canal_delete_own_me_excluido_por_imposible() -> None:
+    """'solo para ti' es IMPOSIBLE en canales (la API
+    borra SIEMPRE para todos — guard de tg/ops). Antes se emitía el paso
+    condenado y el leave se ejecutaba tras su fallo, destruyendo la única
+    ventana de borrado. Ahora el peer queda excluido con razón accionable;
+    con 'all' el orden contractual se mantiene (delete_own SIEMPRE antes
+    de salir — regresión de la 3ª auditoría)."""
     canales = [d for d in _to_infos() if d.kind is PeerKind.CHANNEL]
     plan = build_plan(canales, _options(delete_own="me"), me_id=1)
-    assert [s.kind for s in plan.peers[0].steps] == [
-        StepKind.DELETE_OWN_FOR_ME, StepKind.LEAVE,
-    ]
+    assert plan.peers == []
+    assert plan.excluded and "solo para ti" in plan.excluded[0][1]
+
     plan2 = build_plan(canales, _options(delete_own="all"), me_id=1)
     assert [s.kind for s in plan2.peers[0].steps] == [
         StepKind.DELETE_OWN_FOR_ALL, StepKind.LEAVE,
@@ -211,3 +214,31 @@ def test_blindados_en_plan_rechaza_plan_sin_me_id() -> None:
     sin_me = plan.model_copy(deep=True, update={"me_id": None})
     hallados = blindados_en_plan(sin_me, me_id=1)
     assert hallados and "me_id" in hallados[0][1]
+
+
+def test_plan_con_expires_naive_no_revienta() -> None:
+    """un plan JSON editado a mano con expires_at naive
+    reventaba la comparación contra now(UTC) con TypeError (fuera del
+    contrato "is_expired nunca lanza")."""
+    plan = build_plan(_to_infos(), _options(), me_id=1)
+    naive = plan.model_copy(
+        update={"expires_at": plan.expires_at.replace(tzinfo=None)}
+    )
+    assert naive.is_expired(datetime.now(UTC) - timedelta(minutes=10)) is False
+    assert naive.is_expired(datetime.now(UTC) + timedelta(minutes=10)) is True
+    assert naive.restante_ttl() >= timedelta(0)
+
+
+def test_excluidos_sin_pasos_se_distinguen_de_blindados() -> None:
+    """la UI separa blindados reales de 'sin pasos aplicables'
+    (RAZONES_NO_APLICABLES) — el contador mezclado erosionaba la señal."""
+    from tg_sentry.planner import RAZONES_NO_APLICABLES
+
+    # leave=False: los aplicables quedan "sin pasos"; el UNKNOWN sigue
+    # siendo blindado DURO (otra categoría, no se mezcla)
+    plan = build_plan(_to_infos(), _options(leave=False), me_id=1)
+    sin_pasos = [e for e in plan.excluded if e[1] in RAZONES_NO_APLICABLES]
+    blindados = [e for e in plan.excluded if e[1] not in RAZONES_NO_APLICABLES]
+    assert any("sin pasos" in r for _, r in sin_pasos)
+    assert any("desconocido" in r for _, r in blindados)
+    assert not any("desconocido" in r for _, r in sin_pasos)

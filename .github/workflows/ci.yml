@@ -18,16 +18,25 @@ jobs:
     steps:
       # v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      # v5.3.0
-      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+      # v10.2.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
+          # uv fijado como todo el tooling del proyecto (subirlo = decisión explícita)
+          version: "0.12.24"
+          # gana sobre .python-version → la matriz manda de verdad (verificado)
           python-version: ${{ matrix.python-version }}
-          cache: pip
+          enable-cache: true
+          cache-python: true
+          cache-dependency-glob: uv.lock
+      - name: Verificar que uv.lock está fresco
+        run: uv lock --check
+      - name: Instalar intérprete de la matriz
+        run: uv python install ${{ matrix.python-version }}
       - name: Instalar (app + dev)
-        run: python -m pip install -e .[dev]
+        run: uv sync --frozen --extra dev --python ${{ matrix.python-version }}
       - name: Lint (ruff)
-        run: ruff check .
+        run: uv run --no-sync ruff check .
       - name: Tipos (mypy)
-        run: mypy
+        run: uv run --no-sync mypy
       - name: Tests (pytest, sin red)
-        run: pytest -q
+        run: uv run --no-sync pytest -q

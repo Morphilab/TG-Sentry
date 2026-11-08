@@ -329,7 +329,7 @@ def test_tope_dia_espera_ventana_y_continua() -> None:
 
 
 def test_ttl_vencido_durante_espera_presupuesto_no_ejecuta() -> None:
-    """2ª auditoría P2: la espera de presupuesto puede durar horas; el paso
+    """la espera de presupuesto puede durar horas; el paso
     NO corre bajo un plan formalmente vencido (antes el último paso corría
     igual tras vencer el TTL)."""
     async def run() -> None:
@@ -484,7 +484,7 @@ def test_sesion_invalida_aborta_sin_quemar_reintentos(tmp_path: Path) -> None:
 
 
 def test_ttl_revalidado_a_mitad_de_corrida(tmp_path: Path) -> None:
-    """P2: una corrida de horas no puede seguir bajo un plan vencido."""
+    """una corrida de horas no puede seguir bajo un plan vencido."""
     # el reloj avanza 6 min por CADA paso ejecutado: tras el 1º, el plan
     # (TTL 5 min) queda vencido y el 2º peer aborta por re-validación
     class RelojTTL:
@@ -524,7 +524,7 @@ def test_ttl_revalidado_a_mitad_de_corrida(tmp_path: Path) -> None:
 
 
 def test_fallo_persistencia_tras_paso_aborta_sin_lanzar(tmp_path: Path) -> None:
-    """P2: un error de I/O en after_step (runstate lleno, permisos) respeta
+    """un error de I/O en after_step (runstate lleno, permisos) respeta
     el contrato run() nunca lanza; el paso YA está auditado."""
     async def run() -> None:
         gateway = FakeGateway()
@@ -544,7 +544,7 @@ def test_fallo_persistencia_tras_paso_aborta_sin_lanzar(tmp_path: Path) -> None:
 
 
 def test_rpc_agotado_con_borrado_parcial_aplica_cooldown(tmp_path: Path) -> None:
-    """P3: un delete_own que borra lotes y acaba en fallo TAMBIÉN espacia
+    """un delete_own que borra lotes y acaba en fallo TAMBIÉN espacia
     (trabajo destructivo reciente sin cooldown era un hueco)."""
     async def run() -> None:
         class FallaConParcial(FakeGateway):
@@ -582,7 +582,7 @@ def test_rpc_agotado_con_borrado_parcial_aplica_cooldown(tmp_path: Path) -> None
 
 
 def test_failed_sin_conteo_aplica_cooldown_conservador(tmp_path: Path) -> None:
-    """2ª auditoría P3: un delete_own FAILED sin conteo conocido dejó
+    """un delete_own FAILED sin conteo conocido dejó
     trabajo desconocido en el servidor — cooldown conservador completo."""
     async def run() -> None:
         class FallaSinConteo(FakeGateway):
@@ -617,7 +617,7 @@ def test_failed_sin_conteo_aplica_cooldown_conservador(tmp_path: Path) -> None:
 
 
 def test_trabajo_real_failed_con_parcial_cuenta_para_presupuesto() -> None:
-    """2ª auditoría P2: un FAILED con msgs=N>0 dejó trabajo real en el
+    """un FAILED con msgs=N>0 dejó trabajo real en el
     servidor — cuenta para el sobre (50/h·200/d); msgs=0 y FAILED sin
     conteo no."""
     from tg_sentry.audit import AuditRecord
@@ -636,7 +636,7 @@ def test_trabajo_real_failed_con_parcial_cuenta_para_presupuesto() -> None:
 
 
 def test_cap_delete_messages_gobierna_pasos_delete_own(tmp_path: Path) -> None:
-    """P3: delete_messages_per_hour era config muerta; ahora caps los pasos
+    """delete_messages_per_hour era config muerta; ahora caps los pasos
     de borrado propio (espera rodante, no abort)."""
     async def run() -> None:
         reloj = RelojFalso()
@@ -667,4 +667,189 @@ def test_cap_delete_messages_gobierna_pasos_delete_own(tmp_path: Path) -> None:
         # su ventana del cap y corrió igual (espera rodante, no abort)
         assert resultado.done == 6
 
+    asyncio.run(run())
+
+
+def test_fallo_io_auditoria_en_espera_presupuesto_aborta_no_lanza() -> None:
+    """audit.read() dentro de _espera_presupuesto (y el acquire
+    del bucket) corrían FUERA de toda barrera — un OSError exótico del
+    histórico reventaba el contrato 'run() NUNCA lanza'."""
+    async def run() -> None:
+        plan = _plan(PeerKind.BOT)
+        gateway = FakeGateway()
+
+        class AuditReventado(AuditLog):
+            def read(self):  # type: ignore[no-untyped-def]
+                raise OSError(5, "EIO simulado del histórico")
+
+        engine, _, _log = _engine(
+            tmp_root,
+            gateway,
+            audit=AuditReventado(
+                tmp_root / "audit-roto", rotate_bytes=10**9, keep_days=90
+            ),
+        )
+        result = await engine.run(plan)
+        assert result.done == 0
+        assert result.aborted is not None
+        assert "persistencia antes del paso" in result.aborted
+
+    tmp_root = _tmp()
+    asyncio.run(run())
+
+
+# -- 6ª auditoría: parciales en PeerGone/AdminRequired, omitir cortadores,
+# cooldown justo y TTL dentro de la espera ----------------------------------
+
+
+def test_peer_gone_con_parcial_cuenta_y_espacia() -> None:
+    """un PeerGone a mitad de un lote delete_own BORRÓ
+    mensajes en el servidor — el conteo viaja a auditoría (msgs=N), cuenta
+    como trabajo real para el sobre y aplica cooldown proporcional (antes
+    la rama descartaba el parcial y hasta 100 mensajes quedaban sin
+    espaciar ni contar)."""
+    async def run() -> None:
+        class GoneConParcial(FakeGateway):
+            async def run_step(self, step, dialog):  # type: ignore[no-untyped-def]
+                self.ejecutados.append((dialog.id, step.value))
+                if dialog.id == 100 and step is StepKind.DELETE_OWN_FOR_ME:
+                    exc = PeerGone("channel_private")
+                    exc.tg_sentry_borrados_parciales = 50  # type: ignore[attr-defined]
+                    raise exc
+                if dialog.id == 100 and step is StepKind.LEAVE:
+                    raise PeerGone("not_participant")  # el chat ya no está
+                if step is StepKind.DELETE_OWN_FOR_ME:
+                    return 10  # el gateway real reporta el conteo
+                return None
+
+        gateway = GoneConParcial()
+        plan = build_plan(
+            [
+                DialogInfo(id=100, kind=PeerKind.GROUP, name="a"),
+                DialogInfo(id=101, kind=PeerKind.GROUP, name="b"),
+            ],
+            PlannerOptions(delete_own="me", ttl_min=30),
+            me_id=999,
+        )
+        engine, recorder, log = _engine(tmp_root, gateway)
+        resultado = await engine.run(plan)
+
+        registro = log.read()[0]
+        assert registro.outcome is StepOutcome.SKIPPED_EXTERNAL
+        assert "msgs=50" in (registro.reason or "")
+        assert resultado.messages_deleted == 60  # 50 del skip + 10 del done
+        # el sobre cuenta el skipped con trabajo real
+        assert ExecutionEngine._trabajo_real(registro) is True
+        # cooldown proporcional por los 50 borrados del skip: 50*12=600
+        assert 600 in recorder.sleeps
+        assert resultado.skipped == {"skipped_external": 1, "skipped_ok": 1}
+        assert resultado.done == 2
+
+    tmp_root = _tmp()
+    asyncio.run(run())
+
+
+def test_admin_required_con_parcial_audita_y_omite_leave() -> None:
+    """(a) el parcial de AdminRequired se audita
+    como los demás fallos; (b) el LEAVE posterior se OMITE — ejecutarlo
+    destruiría irreversiblemente la ventana de reintento del borrado."""
+    async def run() -> None:
+        class AdminConParcial(FakeGateway):
+            async def run_step(self, step, dialog):  # type: ignore[no-untyped-def]
+                if step is StepKind.DELETE_OWN_FOR_ME:
+                    self.ejecutados.append((dialog.id, step.value))
+                    exc = AdminRequired("se requiere admin")
+                    exc.tg_sentry_borrados_parciales = 30  # type: ignore[attr-defined]
+                    raise exc
+                self.ejecutados.append((dialog.id, step.value))
+                return None  # el leave NUNCA debería llegar aquí
+
+        gateway = AdminConParcial()
+        plan = build_plan(
+            [DialogInfo(id=100, kind=PeerKind.GROUP, name="g")],
+            PlannerOptions(delete_own="me", ttl_min=30),
+            me_id=999,
+        )
+        engine, _, log = _engine(tmp_root, gateway)
+        resultado = await engine.run(plan)
+
+        assert gateway.ejecutados == [(100, "delete_own_for_me")]
+        delete_registro, leave_registro = log.read()[:2]
+        assert "msgs=30" in (delete_registro.reason or "")
+        assert leave_registro.outcome is StepOutcome.FAILED
+        assert "omitido" in (leave_registro.reason or "")
+        assert resultado.failed == 2
+
+    tmp_root = _tmp()
+    asyncio.run(run())
+
+
+def test_unsupported_step_no_paga_cooldown_ni_leave() -> None:
+    """UnsupportedStep es 0 trabajo comprobado (el guard
+    rechaza ANTES de iterar) — ni cooldown conservador (20 min muertos por
+    paso condenado) ni leave posterior (la ventana queda intacta)."""
+    async def run() -> None:
+        class Condenado(FakeGateway):
+            async def run_step(self, step, dialog):  # type: ignore[no-untyped-def]
+                self.ejecutados.append((dialog.id, step.value))
+                if dialog.id == 100 and step is StepKind.DELETE_OWN_FOR_ME:
+                    raise UnsupportedStep("canales no admiten 'solo para ti'")
+                if step is StepKind.DELETE_OWN_FOR_ME:
+                    return 3
+                return None
+
+        gateway = Condenado()
+        plan = build_plan(
+            [
+                DialogInfo(id=100, kind=PeerKind.GROUP, name="a"),
+                DialogInfo(id=101, kind=PeerKind.GROUP, name="b"),
+            ],
+            PlannerOptions(delete_own="me", ttl_min=30),
+            me_id=999,
+        )
+        engine, recorder, log = _engine(tmp_root, gateway)
+        resultado = await engine.run(plan)
+
+        # el leave del peer condenado jamás llegó al gateway
+        assert (100, "leave") not in gateway.ejecutados
+        # peer 100: delete failed(0) + leave omitido · peer 101: 2 done
+        assert resultado.failed == 2
+        assert resultado.done == 2
+        # sin cooldown conservador: el condenado reportó 0, no None
+        assert recorder.sleeps == []
+        registro_condenado = log.read()[0]
+        assert "msgs=0" in (registro_condenado.reason or "")
+
+    tmp_root = _tmp()
+    asyncio.run(run())
+
+
+def test_block_procede_tras_delete_own_fallido() -> None:
+    """BLOCK no corta el acceso (es reversible): procede aunque el
+    delete_own del mismo peer haya fallado."""
+    async def run() -> None:
+        class FallaDelete(FakeGateway):
+            async def run_step(self, step, dialog):  # type: ignore[no-untyped-def]
+                self.ejecutados.append((dialog.id, step.value))
+                if step is StepKind.DELETE_OWN_FOR_ME:
+                    raise UnsupportedStep("condenado")
+                return None
+
+        gateway = FallaDelete()
+        plan = build_plan(
+            [DialogInfo(id=100, kind=PeerKind.USER, name="u")],
+            PlannerOptions(delete_own="me", block_private=True, ttl_min=30),
+            me_id=999,
+        )
+        engine, _, _ = _engine(tmp_root, gateway)
+        resultado = await engine.run(plan)
+
+        # delete_chat OMITIDO (corta el acceso) pero block ejecutado
+        assert (100, "delete_own_for_me") in gateway.ejecutados
+        assert (100, "delete_chat") not in gateway.ejecutados
+        assert (100, "block") in gateway.ejecutados
+        assert resultado.done == 1
+        assert resultado.failed == 2
+
+    tmp_root = _tmp()
     asyncio.run(run())

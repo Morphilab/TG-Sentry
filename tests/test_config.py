@@ -80,7 +80,7 @@ def test_secciones_desconocidas_rechazadas(tmp_path: Path) -> None:
 
 
 def test_load_config_whitelist_malformada_rechazada_en_carga(tmp_path: Path) -> None:
-    """4ª auditoría: una whitelist no parseable ("--77") se rechaza EN LA
+    """una whitelist no parseable ("--77") se rechaza EN LA
     CARGA con mensaje accionable — antes reventaba tarde (traceback en el
     CLI `plan`, pantalla de crash de Textual en la TUI al recargar)."""
     file = tmp_path / "config.toml"

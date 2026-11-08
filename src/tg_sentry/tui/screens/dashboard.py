@@ -27,7 +27,7 @@ from textual.widgets import (
     Static,
 )
 
-from tg_sentry import inventory
+from tg_sentry import inventory, redact
 from tg_sentry.filters import FilterError, Filters, apply_filters, safe_compile
 from tg_sentry.models import DialogInfo, PeerKind
 from tg_sentry.tui.base import BaseScreen
@@ -122,15 +122,19 @@ class DashboardScreen(BaseScreen):
             self._todos = inventory.load()
             # me_id/contact_ids también leen la DB: un inventario corrupto
             # reventaba AQUÍ (fuera del try) con la pantalla de crash de
-            # Textual (2ª auditoría)
+            # Textual (robustez)
             config = self.sentry_app.config
             me = inventory.me_id()
             contactos = inventory.contact_ids()
         except inventory.CacheIncompatible as exc:
-            self.sentry_app.notify(f"inventario: {exc}", severity="error")
+            # redacta en la salida (robustez): una excepción futura podría
+            # arrastrar secretos — mismo contrato que ejecucion.loguear
+            self.sentry_app.notify(
+                f"inventario: {redact.redact(str(exc))}", severity="error"
+            )
             return
         # la selección SOBREVIVE al refresh: se re-marcan los ids que siguen
-        # existiendo y siguen siendo seleccionables (auditoría 2026-09: antes
+        # existiendo y siguen siendo seleccionables (robustez: antes
         # un refresh borraba la selección del usuario sin avisar)
         previa = self.selection.selected
         try:
@@ -143,7 +147,7 @@ class DashboardScreen(BaseScreen):
         except ValueError as exc:
             # whitelist no parseable (config a mano saltándose el validador):
             # FAIL-CLOSED — sin identidad todo queda 🔒, jamás crash de la app
-            # (4ª auditoría)
+            # (robustez)
             self.sentry_app.notify(
                 f"whitelist inválida ({exc}): todo queda bloqueado hasta "
                 "corregirla en ajustes (o)",
@@ -190,12 +194,12 @@ class DashboardScreen(BaseScreen):
 
     def _aplicar(self) -> None:
         # El filtrado corre en un HILO con timeout (anti-ReDoS práctico):
-        # un regex catastrófico congela el hilo, no la TUI (auditoría 2026-09).
+        # un regex catastrófico congela el hilo, no la TUI (robustez).
         if not self.is_mounted:
             return  # nada que filtrar en desmontaje
         # se pasa la FUNCIÓN, no la coroutine: si el worker se descarta antes
         # de arrancar, la coroutine jamás se crea (sin RuntimeWarning de GC —
-        # 4ª auditoría)
+        # robustez)
         self.run_worker(self._aplicar_worker, exclusive=True)  # type: ignore[arg-type]
 
     async def _aplicar_worker(self) -> None:
@@ -210,7 +214,7 @@ class DashboardScreen(BaseScreen):
                 timeout=5.0,
             )
         except FilterError as exc:
-            self.sentry_app.notify(f"filtro: {exc}", severity="error")
+            self.sentry_app.notify(f"filtro: {redact.redact(str(exc))}", severity="error")
             self._filtrados = []
         except TimeoutError:
             self.sentry_app.notify(
@@ -218,7 +222,7 @@ class DashboardScreen(BaseScreen):
             )
             self._filtrados = []
         except ValueError as exc:  # ValidationError (p. ej. días fuera de rango)
-            self.sentry_app.notify(f"filtro inválido: {exc}", severity="error")
+            self.sentry_app.notify(f"filtro inválido: {redact.redact(str(exc))}", severity="error")
             self._filtrados = []
         self._render_tabla()
         self._render_resumen()
@@ -276,7 +280,6 @@ class DashboardScreen(BaseScreen):
         return fila
 
     # -- acciones de teclado ------------------------------------------------
-
     def action_marcar(self) -> None:
         dialog = self._dialogo_en_fila()
         if dialog is None:
@@ -336,7 +339,7 @@ class DashboardScreen(BaseScreen):
             self.sentry_app.notify("selecciona algo primero (espacio / a)", severity="warning")
             return
         # El plan usa TODA la selección (no solo lo visible): el contador de
-        # la UI debe cuadrar con lo que entra al plan (auditoría 2026-09).
+        # la UI debe cuadrar con lo que entra al plan (robustez).
         seleccion = self.selection.selected_dialogs(self._todos)
         ocultos = len(seleccion) - len(self.selection.selected_dialogs(self._filtrados))
         if ocultos > 0:
@@ -355,7 +358,7 @@ class DashboardScreen(BaseScreen):
     async def _refresh(self) -> None:
         # try/except: un fallo de red/RPC en el refresh NO puede matar la TUI
         # entera (un worker en error cierra la app — Textual exit_on_error;
-        # auditoría 2026-09).
+        # robustez).
         try:
             self.sentry_app.notify("actualizando inventario (solo lectura)…")
             client = await self.sentry_app.get_client()
@@ -364,10 +367,11 @@ class DashboardScreen(BaseScreen):
             self.sentry_app.notify(f"inventario: {stats.total} diálogos")
         except Exception as exc:
             logger.warning("refresh falló", exc_info=True)
-            self.sentry_app.notify(f"refresh falló: {exc}", severity="error")
+            self.sentry_app.notify(
+                f"refresh falló: {redact.redact(str(exc))}", severity="error"
+            )
 
     # -- eventos de widgets ---------------------------------------------------
-
     def on_checkbox_changed(self, _event: Checkbox.Changed) -> None:
         self._aplicar()
 

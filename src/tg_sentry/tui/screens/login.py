@@ -7,6 +7,7 @@ bloqueantes). Solo aparece si no hay sesión autorizada.
 from __future__ import annotations
 
 import contextlib
+import os
 from typing import ClassVar
 
 from textual.app import ComposeResult
@@ -15,7 +16,15 @@ from textual.containers import Vertical
 from textual.widgets import Button, Footer, Header, Input, Label, Static
 
 import tg_sentry.paths as paths
-from tg_sentry.tg.client import PasswordRequired, start_code_login
+from tg_sentry import redact
+from tg_sentry.tg.client import (
+    STRING_SESSION_ENV,
+    PasswordInvalid,
+    PasswordRequired,
+    finish_code_login,
+    session_target,
+    start_code_login,
+)
 from tg_sentry.tui.base import BaseScreen
 
 
@@ -49,6 +58,10 @@ class LoginScreen(BaseScreen):
         yield Footer()
 
     def _estado(self, texto: str, error: bool = False) -> None:
+        # redacta en el punto de salida (robustez): las excepciones
+        # interpoladas pueden arrastrar secretos en el mensaje — mismo
+        # contrato que ejecucion.loguear, aplicado a la UI de login
+        texto = redact.redact(texto)
         self.query_one("#estado", Static).update(
             f"[b {'red' if error else 'green'}]{texto}[/]"
         )
@@ -60,7 +73,7 @@ class LoginScreen(BaseScreen):
         return [self.query_one("#conectar", Button), self.query_one("#entrar", Button)]
 
     def _bloquear(self, bloqueados: bool) -> None:
-        """Botones fuera de servicio mientras el worker corre (2ª auditoría:
+        """Botones fuera de servicio mientras el worker corre (robustez:
         un segundo click cancelaba el worker a mitad de start_code_login y el
         cliente ya conectado quedaba HUÉRFANO agarrando el lock de la sesión)."""
         for boton in self._botones():
@@ -86,7 +99,7 @@ class LoginScreen(BaseScreen):
             return
         # desconecta un cliente previo de un intento anterior: dos clientes
         # sobre el MISMO .session SQLite = "database is locked" y riesgo de
-        # sesión corrupta (auditoría 2026-09)
+        # sesión corrupta (robustez)
         if self._client is not None:
             previo, self._client = self._client, None
             self._phone_code_hash = None
@@ -104,7 +117,7 @@ class LoginScreen(BaseScreen):
         self._client = client
         # registrar YA en la app (no solo al finalizar): si el usuario sale con
         # el login a mitad (escape = quit), on_exit_app desconecta este cliente
-        # en vez de dejarlo fugado hasta morir el proceso (3ª auditoría)
+        # en vez de dejarlo fugado hasta morir el proceso (robustez)
         self.sentry_app.set_client(client)
         self._phone = telefono
         if code_hash is None:
@@ -129,9 +142,12 @@ class LoginScreen(BaseScreen):
 
     async def _entrar_bloqueado(self) -> None:
         codigo = self.query_one("#codigo", Input).value.strip()
-        from tg_sentry.tg.client import finish_code_login
-
         password = self.query_one("#password", Input).value or None
+        try:
+            telegram = self.sentry_app.config.telegram
+        except Exception as exc:  # config corrupta: mensaje, no crash
+            self._estado(f"Error de configuración: {exc}", error=True)
+            return
         try:
             await self.sentry_app.telethon_call(
                 finish_code_login(
@@ -140,10 +156,21 @@ class LoginScreen(BaseScreen):
                     codigo,
                     self._phone_code_hash,
                     password=password,
+                    # session EXPLÍCITO (robustez): sin él, el harden de
+                    # permisos corría la ruta XDG por defecto y la sesión
+                    # REAL (telegram.session del TOML) quedaba 0644 con la
+                    # auth key dentro hasta la próxima conexión
+                    session=telegram.session or None,
                 )
             )
         except PasswordRequired:
             self._estado("Tu cuenta tiene 2FA: escribe la contraseña y reintenta.", error=True)
+            return
+        except PasswordInvalid:
+            # str(PasswordInvalid) es "" (excepción sin texto): sin este
+            # catch la pantalla mostraba literalmente "Error: " a secas
+            # (robustez) — el reintento del CLI ya era vivo (3ª aud.)
+            self._estado("Contraseña 2FA incorrecta: revisa y reintenta.", error=True)
             return
         except Exception as exc:
             self._estado(f"Error: {exc}", error=True)
@@ -153,15 +180,23 @@ class LoginScreen(BaseScreen):
     def _finalizar(self) -> None:
         if self._client is not None:
             self.sentry_app.set_client(self._client)
-        sesion = paths.session_path()
-        modo = oct(paths.file_mode(sesion) or 0)
-        self._estado(f"✓ Sesión autorizada ({sesion}, permisos {modo}).")
+        if os.environ.get(STRING_SESSION_ENV):
+            # la sesión real NO es un archivo: no tiene sentido mostrar
+            # permisos de la ruta XDG (salía "0o0" — robustez)
+            self._estado("✓ Sesión autorizada (StringSession de variable de entorno).")
+        else:
+            telegram = self.sentry_app.config.telegram
+            # ruta REAL de la sesión (explícita del TOML o XDG): antes se
+            # mostraba SIEMPRE la de por defecto (robustez)
+            sesion = session_target(telegram.session or None)
+            modo = oct(paths.file_mode(sesion) or 0)
+            self._estado(f"✓ Sesión autorizada ({sesion}, permisos {modo}).")
         self.sentry_app.notify("Sesión autorizada")
         self.sentry_app.after_login()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         # funciones, no coroutines invocadas: un worker descartado antes de
-        # arrancar no deja una coroutine sin await (4ª auditoría)
+        # arrancar no deja una coroutine sin await (robustez)
         if event.button.id == "conectar":
             self.run_worker(self._conectar, exclusive=True)  # type: ignore[arg-type]
         elif event.button.id == "entrar":

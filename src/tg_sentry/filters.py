@@ -1,7 +1,7 @@
 """Filtros combinables del inventario.
 
 El regex se compila con `safe_compile`: longitud acotada y errores de
-sintaxis capturados. NOTE (auditoría 2026-09): la ejecución del regex es
+sintaxis capturados. NOTE: la ejecución del regex es
 SÍNCRONA (Python `re` no tiene timeout). La TUI la descarga a un hilo con
 timeout (el event loop no se congela; el hilo huérfano termina solo tarde
 o temprano); en CLI el patrón es del propio usuario sobre datos locales.
@@ -118,7 +118,7 @@ def parse_filter_expr(expr: str) -> Filters:
         return Filters.model_validate(values)
     except ValidationError as exc:
         # fuera del contrato del CLI: inactive=-5 llegaba como traceback
-        # pydantic crudo en vez de "error de filtro" (2ª auditoría)
+        # pydantic crudo en vez de "error de filtro" (robustez)
         msg = str(exc)
         raise FilterError(msg) from exc
 
@@ -133,7 +133,7 @@ def _parse_int(key: str, raw: str) -> int:
 
 def _normalizar(texto: str) -> str:
     """Casefold + NFC: matching de nombres estable ante unicode raro
-    (İstanbul, ß, acentos descompuestos — auditoría 2026-09)."""
+    (İstanbul, ß, acentos descompuestos — robustez)."""
     return unicodedata.normalize("NFC", texto).casefold()
 
 

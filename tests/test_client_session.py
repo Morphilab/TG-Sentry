@@ -34,3 +34,39 @@ def test_harden_session_perms_sin_archivos_no_explota(tmp_path: Path) -> None:
     from tg_sentry.tg.client import harden_session_perms
 
     harden_session_perms(tmp_path / "inexistente.session")
+
+
+def test_start_code_login_desconecta_si_falla_is_user_authorized(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """el patrón disconnect-antes-de-propagar solo cubría
+    send_code_request — un fallo en is_user_authorized dejaba el cliente
+    CONECTADO huérfano (en la TUI, dentro del runtime: set_client jamás lo
+    veía, y el reintento creaba un SEGUNDO cliente sobre el mismo .session)."""
+    import asyncio
+
+    import pytest
+
+    from tg_sentry.tg import client as mod
+
+    class ClienteQueFalla:
+        def __init__(self) -> None:
+            self.conectado = False
+            self.desconectado = False
+
+        async def connect(self) -> None:
+            self.conectado = True
+
+        async def is_user_authorized(self) -> bool:
+            raise ConnectionError("red caída tras conectar")
+
+        async def disconnect(self) -> None:
+            self.desconectado = True
+
+    falso = ClienteQueFalla()
+    monkeypatch.setattr(mod, "build_client", lambda *a, **k: falso)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    with pytest.raises(ConnectionError):
+        asyncio.run(mod.start_code_login(1, "a" * 32, "+10000000000", None))
+    assert falso.conectado
+    assert falso.desconectado  # sin huérfano: se desconecta ANTES de propagar

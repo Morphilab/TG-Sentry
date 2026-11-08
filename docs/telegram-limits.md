@@ -1,6 +1,6 @@
 # Límites conocidos de Telegram — tg-sentry
 
-> Estado: **v0.1.0**. Telegram NO publica límites oficiales para clientes MTProto;
+> Estado: **v0.1.1**. Telegram NO publica límites oficiales para clientes MTProto;
 > esto es experiencia acumulada de la comunidad + hallazgos del piloto real
 > (protocolo interno del proyecto).
 
@@ -13,7 +13,7 @@
 | Bloquear usuarios | ~50/h | Empírico |
 | Borrar mensajes (batch) | 1 paso = ≤100 msgs + cooldown proporcional | 12s por mensaje borrado (piso 60s, techo 20 min) → ~300 msgs/h; se OMITE si borró 0 o no queda ningún paso de borrado |
 | Tope duro de sesión | 50 destructivas/h, 200/día | **Constante de código**, no configurable; al llenarse la cola **ESPERA** la ventana rodante (con countdown) — nunca aborta |
-| FloodWait | se respeta SIEMPRE | Pausa bucket; gracia 2× espera tras terminar |
+| FloodWait | se respeta SIEMPRE hasta el umbral config | Pausa bucket; gracia 2× espera tras terminar. Un FloodWait MAYOR que `floodwait_pause_threshold_s` (default 300s) aborta la cola (queda reanudable): no se sigue operando tras una pausa tan larga |
 | Patrón de baneo | 2º FloodWait <5 min | Pausa indefinida + aviso; reanudación solo manual |
 
 ## Semánticas verificadas o documentadas
@@ -21,28 +21,33 @@
 - **48h** (mensajes propios): borrar-para-todos solo dentro de las primeras
   48h; fuera de 48h el servidor degrada automáticamente a solo-para-ti
   (privados y grupos). El modo `all` nunca es error por edad. Modo `me`
-  borra solo para ti, sin límite de edad, siempre. Operaciones distintas en
-  `tg/ops.py` (`delete_own_messages(for_all=)`) y en la UI.
+  borra solo para ti, sin límite de edad, en privados, bots y grupos básicos;
+  en canales y supergrupos la API lo rechaza (ahí solo existe para-todos).
+  Operaciones distintas en `tg/ops.py` (`delete_own_messages(for_all=)`) y
+  en la UI.
 - **Salir vs borrar**: en grupos/canales `delete_dialog` = salir/darse de
   baja; el objeto sigue existiendo para los demás. El rol (creador/admin)
   exige `GetParticipant` por peer — mientras no se consulte, grupos y
   canales avisan «rol sin verificar: no se puede descartar que seas creador»
   (la exclusión por creador NO está activa hoy; ver `docs/security.md`).
-- **Chats secretos**: Telethon no implementa E2E → detectar y marcar "no
-  soportado", jamás operarlos como privados normales.
+- **Chats secretos**: Telethon no implementa E2E y no los itera, así que no
+  aparecen en el inventario; `safety` los excluye si llegaran en un plan
+  manipulado. Jamás se operan como privados normales.
 - **`revoke`** (eliminar chat privado): borra también del otro lado
   (sujeto a límites temporales del servidor).
 - **`client.block` no existe en Telethon**: el bloqueo es API cruda
-  (`BlockRequest`) — hallazgo del piloto.
+  (`BlockRequest`) — hallazgo verificado contra la API.
 - **`clear_history`** (vaciar historial SIN salir de un chat conservado):
   sin primitiva verificada en Telethon 1.x; el paso queda deshabilitado
-  (`UnsupportedStep`) hasta investigar `messages.deleteHistory(just_clear)`
-  en un piloto. La alternativa segura disponible: `--delete-own me --no-leave`
-  (borra tus mensajes sin salir).
+  (`UnsupportedStep`) hasta investigar `messages.deleteHistory(just_clear)`.
+  La alternativa disponible es `--delete-own me --no-leave` (borra tus
+  mensajes sin salir), solo en privados, bots y grupos básicos; en canales
+  y supergrupos no aplica.
 
 ## ¿Cuánto cuesta limpiar mensajes propios? (la palanca honesta)
 
-El default (12s/mensaje) es el envelope MÁS conservador. Contexto honesto:
+El default (12s/mensaje) es el envelope proporcional más conservador; el
+fijo histórico de 20 min por paso era más lento, no más seguro. Contexto honesto:
 borrar **tus propios mensajes** es la operación de MENOR riesgo de la
 herramienta — eliminas tu contenido, no actúas sobre terceros, y los
 clientes oficiales vacían historiales de cientos de mensajes al instante.

@@ -56,7 +56,7 @@ def test_role_valido_e_invalido() -> None:
 
 
 def test_clave_duplicada_rechazada() -> None:
-    """2ª auditoría: inactive=5,inactive=90 ganaba la última en silencio."""
+    """inactive=5,inactive=90 ganaba la última en silencio."""
     with pytest.raises(FilterError, match="duplicada"):
         parse_filter_expr("inactive=5,inactive=90")
 
@@ -67,7 +67,7 @@ def test_valor_vacio_rechazado() -> None:
 
 
 def test_inactive_fuera_de_rango_es_filtererror_no_validationerror() -> None:
-    """2ª auditoría: inactive=-5 pasaba el parseo y reventaba con
+    """inactive=-5 pasaba el parseo y reventaba con
     ValidationError de pydantic (traceback crudo en el CLI)."""
     with pytest.raises(FilterError):
         parse_filter_expr("inactive=-5")

@@ -1,6 +1,6 @@
 # Modelo de seguridad y amenazas — tg-sentry
 
-> Estado: **v0.1.0 (documento vivo)** — se amplía con cada mejora.
+> Estado: **v0.1.1 (documento vivo)** — se amplía con cada mejora.
 
 ## Advertencia principal (no negociable)
 
@@ -14,11 +14,11 @@ leerse como "baneo imposible".
 
 | Amenaza | Mitigación estructural | Residual |
 |---|---|---|
-| Baneo/suspensión por acciones masivas | Rate limit conservador (4/min, solo configurable a la baja), topes por tipo y de sesión (50/h, 200/día en código), FloodWait con prioridad absoluta, pausa indefinida ante patrón de baneo | **Alto e inevitable** — es el riesgo primario |
-| Borrado irreversible por error | Dry-run por defecto, plan congelado + re-validación TTL 5 min, confirmación tecleada `CONFIRMAR`, lista de blindados excluidos visible | Bajo |
+| Baneo/suspensión por acciones masivas | Rate limit conservador (4/min; subirlo exige `--ack-over-limit`), topes por tipo y de sesión (50/h, 200/día en código), FloodWait con prioridad absoluta, pausa indefinida ante patrón de baneo | **Alto e inevitable** — es el riesgo primario |
+| Borrado irreversible por error | Dry-run por defecto, plan congelado + re-validación **local** (TTL 5 min + frescura de la caché; los cambios remotos se descubren al ejecutar), confirmación tecleada `CONFIRMAR`, lista de blindados excluidos visible | Bajo |
 | Pérdida de trazabilidad | Auditoría JSONL append-only con rotación; estados diferenciados (`done`/`skipped_ok`/`skipped_unreachable`/`skipped_external`/`failed`) | Bajo |
 | Fuga de credenciales | Sesión en XDG 0600 (dir 0700), StringSession solo por env var, config 0600, logs redactados (api_hash, api_id, teléfono, códigos, 2FA) | Bajo |
-| Operar sobre lo que no se debía | Peers blindados de fábrica (propia cuenta, Saved Messages, 777000, whitelist), protección de contactos por defecto; la protección «propios como creador» está pendiente de verificar el rol por chat (hoy avisa «rol sin verificar») | Bajo |
+| Operar sobre lo que no se debía | Peers blindados de fábrica (propia cuenta, Saved Messages, 777000, whitelist), protección de contactos por defecto (activa con caché refrescada por esta versión; si la meta falta, queda inactiva y se avisa en plan/apply); la protección «propios como creador» está pendiente de verificar el rol por chat (hoy avisa «rol sin verificar») | Bajo (Bajo-Medio si planificas con la advertencia de contactos ignorada) |
 
 ## Invariantes de diseño
 

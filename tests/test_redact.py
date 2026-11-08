@@ -43,7 +43,7 @@ def test_filter_redacta_msg_y_anula_args() -> None:
 
 
 def test_traceback_tambien_se_redacta() -> None:
-    """2ª auditoría: el exc_info se formatea DESPUÉS del filter — mensajes de
+    """el exc_info se formatea DESPUÉS del filter — mensajes de
     excepción con secretos (str(exc)) escapaban sin redactar."""
     import io
     import logging as _logging

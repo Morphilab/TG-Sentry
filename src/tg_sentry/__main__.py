@@ -17,9 +17,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 
-import telethon
-from telethon import TelegramClient
-
 import tg_sentry
 import tg_sentry.paths as paths
 from tg_sentry import errors as tg_errors
@@ -43,10 +40,12 @@ from tg_sentry.planner import (
 from tg_sentry.tg.client import (
     CredentialsError,
     SesionNoAutorizada,
+    TelegramClient,
     connect_and_login,
     segundos_flood,
+    version_telethon,
 )
-from tg_sentry.tg.ops import TeleOpsGateway
+from tg_sentry.tg.ops import TeleOpsGateway, own_id
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +72,7 @@ def _run_tui() -> int:
         pass
     setup_logging(nivel)
     # mismo registro de secretos que el CLI: la redacción solo actúa sobre lo
-    # registrado, y la TUI loguea excepciones (3ª auditoría). Si el TOML no
+    # registrado, y la TUI loguea excepciones (robustez). Si el TOML no
     # carga, la TUI mostrará el error en UI sin estos valores.
     try:
         from tg_sentry import redact as _redact
@@ -84,7 +83,26 @@ def _run_tui() -> int:
         _redact.register_secret(telegram.phone)
     except Exception:
         pass
-    SentryApp().run()
+    # excepthook redactado también en la vía TUI (robustez): una
+    # excepción que escape del arranque (driver, get_default_screen fuera
+    # del ErrorScreen) iba al excepthook DEFAULT de Python — sin redacción.
+    # El camino de crash DENTRO de la TUI ya está cubierto por el wrapper
+    # de stderr (_StderrRedactado); este es el hueco paralelo de arranque.
+    def _excepthook_tui(
+        tipo: type[BaseException], valor: BaseException, traza: TracebackType | None
+    ) -> None:
+        logging.getLogger(__name__).critical(
+            "excepción no capturada (arranque TUI)", exc_info=(tipo, valor, traza)
+        )
+
+    sys.excepthook = _excepthook_tui
+    app = SentryApp()
+    app.run()
+    # exit code REAL (robustez): Textual marca return_code=1 en todo
+    # crash y su docstring pide consultarlo; devolver EXIT_OK siempre hacía
+    # una TUI crasheada indistinguible de una salida limpia en scripts/CI.
+    if getattr(app, "return_code", None):
+        return EXIT_ERROR
     return EXIT_OK
 
 
@@ -183,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         tipo: type[BaseException], valor: BaseException, traza: TracebackType | None
     ) -> None:
         # los tracebacks crudos por stderr NO pasan por logging: un str(exc)
-        # con datos del usuario escapaba sin redactar (2ª auditoría)
+        # con datos del usuario escapaba sin redactar (robustez)
         logger.critical("excepción no capturada", exc_info=(tipo, valor, traza))
 
     sys.excepthook = _excepthook
@@ -205,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
     except ConnectionError as exc:
         # connect() de Telethon lanza ConnectionError crudo (login/dialogs):
-        # mensaje accionable, no traceback (3ª auditoría)
+        # mensaje accionable, no traceback (robustez)
         print(f"sin conexión con Telegram: {exc}", file=sys.stderr)
         return EXIT_ERROR
     except tg_errors.StepError as exc:
@@ -302,7 +320,13 @@ async def _connect_authorized(config: Config) -> TelegramClient | None:
 
 
 async def _cmd_dialogs(config: Config, limit: int, refresh: bool) -> int:
-    if refresh or inventory.fetched_at() is None:
+    try:
+        sin_cache = inventory.fetched_at() is None
+    except inventory.CacheIncompatible as exc:
+        # inventario corrupto: mensaje accionable, no traceback (robustez)
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    if refresh or sin_cache:
         print(
             "Actualizando inventario completo (solo lectura)…"
             if refresh
@@ -326,7 +350,7 @@ async def _cmd_dialogs(config: Config, limit: int, refresh: bool) -> int:
                 if espera is None:
                     raise
                 # iter_dialogs puede recibir FloodWait refrescando cientos de
-                # diálogos: accionable, no traceback (3ª auditoría)
+                # diálogos: accionable, no traceback (robustez)
                 print(
                     f"Telegram pide esperar {espera}s (FloodWait): "
                     "reintenta más tarde.",
@@ -337,8 +361,13 @@ async def _cmd_dialogs(config: Config, limit: int, refresh: bool) -> int:
         finally:
             await client.disconnect()
 
-    age = inventory.cache_age()
-    if inventory.is_stale(config.cache.ttl_min):
+    try:
+        age = inventory.cache_age()
+        stale = inventory.is_stale(config.cache.ttl_min)
+    except inventory.CacheIncompatible as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    if stale:
         print(f"⚠ caché caducada (edad {_fmt_age(age)}); usa --refresh para actualizar")
 
     try:
@@ -359,7 +388,12 @@ async def _cmd_dialogs(config: Config, limit: int, refresh: bool) -> int:
 
 
 def _cmd_export(fmt: Format, output: str | None) -> int:
-    if inventory.fetched_at() is None:
+    try:
+        sin_cache = inventory.fetched_at() is None
+    except inventory.CacheIncompatible as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    if sin_cache:
         print("Sin caché: ejecuta antes tg-sentry dialogs --refresh", file=sys.stderr)
         return EXIT_NO_SESSION
     try:
@@ -384,13 +418,22 @@ def _cmd_plan(
     no_leave: bool = False,
 ) -> int:
     """Construye el plan (dry-run) desde caché. NADA se ejecuta aquí."""
-    if inventory.fetched_at() is None:
+    try:
+        sin_cache = inventory.fetched_at() is None
+        stale = inventory.is_stale(config.cache.ttl_min)
+        edad = inventory.cache_age()
+    except inventory.CacheIncompatible as exc:
+        # inventario corrupto: mensaje accionable, no traceback (robustez —
+        # antes solo load()/me_id() estaban blindados, las primeras lecturas
+        # salían por el excepthook)
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    if sin_cache:
         print("Sin caché: ejecuta antes tg-sentry dialogs --refresh", file=sys.stderr)
         return EXIT_NO_SESSION
-    stale = inventory.is_stale(config.cache.ttl_min)
     if stale and not allow_stale:
         print(
-            f"caché caducada (edad {_fmt_age(inventory.cache_age())}); "
+            f"caché caducada (edad {_fmt_age(edad)}); "
             "usa dialogs --refresh o --allow-stale",
             file=sys.stderr,
         )
@@ -405,12 +448,22 @@ def _cmd_plan(
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
 
-    # Fail-closed: sin identidad propia NO hay plan (auditoría 2026-09).
+    # Fail-closed: sin identidad propia NO hay plan (robustez).
     try:
         me = inventory.me_id()
+        contactos = inventory.contact_ids()
     except inventory.CacheIncompatible as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
+    if config.safety.protect_contacts and not contactos:
+        # robustez: la meta ausente (caché vieja) apagaba la protección
+        # en silencio — fail-open VISIBLE con camino accionable
+        print(
+            "⚠ protect_contacts activo pero la caché no tiene datos de "
+            "contactos: la protección de contactos está INACTIVA en este "
+            "plan — tg-sentry dialogs --refresh",
+            file=sys.stderr,
+        )
     if me is None:
         print(
             "caché sin me_id (identidad de tu cuenta): ejecuta tg-sentry dialogs --refresh",
@@ -429,7 +482,7 @@ def _cmd_plan(
             ),
             me_id=me,
             whitelist=config.safety.whitelist,
-            contact_ids=inventory.contact_ids(),
+            contact_ids=contactos,
             protect_contacts=config.safety.protect_contacts,
             recent_private_days=config.safety.recent_private_days,
         )
@@ -447,7 +500,7 @@ def _cmd_plan(
         destino.parent.mkdir(parents=True, exist_ok=True)  # ruta del usuario: sin chmod
     else:
         paths.ensure_private_dir(destino.parent)  # dir de la app: higiene 0700
-    # 0600 desde la creación (2ª auditoría: el plan lleva nombres de diálogos)
+    # 0600 desde la creación (robustez: el plan lleva nombres de diálogos)
     with exporting.abrir_0600(destino) as handle:
         handle.write(plan.model_dump_json(indent=1))
     destino.chmod(0o600)
@@ -510,15 +563,24 @@ async def _cmd_apply(
         )
         return EXIT_CONFIG
     # Defensa en profundidad: re-validar exclusiones duras sobre el plan JSON
-    # (auditoría 2026-09): un plan con bug/edited a mano NO se ejecuta.
+    # (robustez): un plan con bug/edited a mano NO se ejecuta.
     try:
         me_actual = inventory.me_id()
         contactos = inventory.contact_ids()
     except inventory.CacheIncompatible as exc:
         # caché incompatible a mitad de sesión: fail-closed con mensaje
-        # (3ª auditoría: traceback crudo fuera del try)
+        # (robustez: traceback crudo fuera del try)
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
+    if config.safety.protect_contacts and not contactos:
+        # robustez: fail-open visible — la meta ausente dejaba la
+        # protección de contactos apagada sin ni un aviso
+        print(
+            "⚠ protect_contacts activo pero la caché no tiene datos de "
+            "contactos: la protección de contactos está INACTIVA — "
+            "tg-sentry dialogs --refresh antes de aplicar",
+            file=sys.stderr,
+        )
     if me_actual is None:
         print(
             "caché sin me_id: ejecuta tg-sentry dialogs --refresh antes de aplicar",
@@ -534,7 +596,7 @@ async def _cmd_apply(
             protect_contacts=config.safety.protect_contacts,
         )
     except ValueError as exc:
-        # whitelist no parseable (defensa en profundidad, 4ª auditoría):
+        # whitelist no parseable (defensa en profundidad, robustez):
         # la re-validación de blindados NO es un traceback — es un rechazo
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
@@ -548,68 +610,90 @@ async def _cmd_apply(
         )
         return EXIT_CONFIG
 
+    # lock GLOBAL + por plan ANTES de leer el runstate (robustez: TOCTOU —
+    # cargar completados antes del lock y conectar en medio permitía reanudar
+    # con un snapshot viejo si otro proceso acababa el MISMO plan; y sin lock
+    # global, dos planes distintos en paralelo duplicaban el ritmo del bucket).
+    client: TelegramClient | None = None
     try:
-        completados = runstate.load_completed(plan)
-    except runstate.RunstateCorrupto as exc:
-        # fail-closed: un runstate corrupto NO se salta (re-ejecutaría done)
-        print(f"error: {exc}", file=sys.stderr)
-        return EXIT_ERROR
-    pendientes = sum(
-        1
-        for peer in plan.peers
-        for step in peer.steps
-        if (peer.dialog.id, step.kind.value) not in completados
-    )
-    if pendientes == 0:
-        print("Nada pendiente: el plan ya está ejecutado por completo.")
-        return EXIT_OK
-    print(
-        f"Plan {plan.plan_id}: {len(plan.peers)} peers, {pendientes} pasos pendientes"
-        + (" (reanudación)" if completados else "")
-    )
-
-    client = await _connect_authorized(config)
-    if client is None:
-        return EXIT_NO_SESSION
-    motor = ExecutionEngine(
-        TeleOpsGateway(client),
-        EngineLimits(
-            writes_per_min=config.limits.writes_per_min,
-            leave_per_hour=config.limits.leave_groups_per_hour,
-            block_per_hour=config.limits.block_per_hour,
-            delete_messages_per_hour=config.limits.delete_messages_per_hour,
-            floodwait_pause_threshold_s=config.limits.floodwait_pause_threshold_s,
-            floodwait_pattern_window_s=config.limits.floodwait_pattern_window_s,
-            # antes el CLI ignoraba este valor del TOML (divergencia con la
-            # TUI en dirección INSEGURA) — auditoría 2026-09
-            own_messages_cooldown_s=config.limits.own_messages_cooldown_s,
-        ),
-        AuditLog(rotate_bytes=config.audit.rotate_bytes, keep_days=config.audit.keep_days),
-    )
-    estado: set[runstate.CompletedStep] = set(completados)
-
-    def tras_paso(peer_id: int, paso: StepKind, resultado: StepOutcome) -> None:
-        estado.add(runstate.step_key(peer_id, paso))
-        runstate.save(plan, estado)
-        print(f"  [{resultado.value:>18}] peer {peer_id} · {paso.value}")
-
-    try:
-        # lock por plan: CLI y TUI no pueden correr el MISMO plan a la vez
         with runstate.ejecucion_exclusiva(plan) as exclusivo:
             if not exclusivo:
                 print(
-                    "ya hay una ejecución activa de este plan (¿la TUI?): "
-                    "no se lanza otra",
+                    "ya hay una ejecución activa (¿la TUI u otro tg-sentry "
+                    "apply?): no se lanza otra",
                     file=sys.stderr,
                 )
                 return EXIT_ERROR
+            try:
+                completados = runstate.load_completed(plan)
+            except runstate.RunstateCorrupto as exc:
+                # fail-closed: un runstate corrupto NO se salta (re-ejecutaría
+                # done)
+                print(f"error: {exc}", file=sys.stderr)
+                return EXIT_ERROR
+            pendientes = sum(
+                1
+                for peer in plan.peers
+                for step in peer.steps
+                if (peer.dialog.id, step.kind.value) not in completados
+            )
+            if pendientes == 0:
+                print("Nada pendiente: el plan ya está ejecutado por completo.")
+                return EXIT_OK
+            print(
+                f"Plan {plan.plan_id}: {len(plan.peers)} peers, {pendientes} pasos pendientes"
+                + (" (reanudación)" if completados else "")
+            )
+
+            client = await _connect_authorized(config)
+            if client is None:
+                return EXIT_NO_SESSION
+            # Identidad VIVA vs plan (robustez): el me_id de la caché
+            # y el del plan salían de la MISMA DB — un swap de sesión
+            # (TG_SENTRY_STRING_SESSION o session= del TOML) con caché sin
+            # refrescar ejecutaba el plan de la cuenta A contra la cuenta B
+            # (los contactos de B quedaban desprotegidos). La identidad en el
+            # momento destructivo sale de la SESIÓN conectada.
+            me_vivo = await own_id(client)
+            if me_vivo != plan.me_id:
+                print(
+                    f"la sesión conectada (id {me_vivo}) NO es la cuenta del plan "
+                    f"(id {plan.me_id}): swap de sesión o caché sin refrescar. "
+                    "Regenera el plan con esta sesión o re-haz tg-sentry login.",
+                    file=sys.stderr,
+                )
+                return EXIT_NO_SESSION
+            motor = ExecutionEngine(
+                TeleOpsGateway(client),
+                EngineLimits(
+                    writes_per_min=config.limits.writes_per_min,
+                    leave_per_hour=config.limits.leave_groups_per_hour,
+                    block_per_hour=config.limits.block_per_hour,
+                    delete_messages_per_hour=config.limits.delete_messages_per_hour,
+                    floodwait_pause_threshold_s=config.limits.floodwait_pause_threshold_s,
+                    floodwait_pattern_window_s=config.limits.floodwait_pattern_window_s,
+                    # antes el CLI ignoraba este valor del TOML (divergencia con la
+                    # TUI en dirección INSEGURA) — robustez
+                    own_messages_cooldown_s=config.limits.own_messages_cooldown_s,
+                ),
+                AuditLog(
+                    rotate_bytes=config.audit.rotate_bytes, keep_days=config.audit.keep_days
+                ),
+            )
+            estado: set[runstate.CompletedStep] = set(completados)
+
+            def tras_paso(peer_id: int, paso: StepKind, resultado_paso: StepOutcome) -> None:
+                estado.add(runstate.step_key(peer_id, paso))
+                runstate.save(plan, estado)
+                print(f"  [{resultado_paso.value:>18}] peer {peer_id} · {paso.value}")
+
             try:
                 resultado = await motor.run(
                     plan, completed=estado, after_step=tras_paso, max_peers=limit_peers
                 )
             except PlanExpiredError:
                 # ventana TOCTOU: el plan venció TRAS el check inicial y una
-                # espera de presupuesto (2ª auditoría) — accionable, no traceback
+                # espera de presupuesto (robustez) — accionable, no traceback
                 print(
                     f"El plan expiró mientras se ejecutaba (TTL "
                     f"{config.plan.ttl_min} min): regénéralo con tg-sentry plan "
@@ -618,7 +702,8 @@ async def _cmd_apply(
                 )
                 return EXIT_ERROR
     finally:
-        await client.disconnect()
+        if client is not None:
+            await client.disconnect()
 
     partes = [f"{resultado.done} done"]
     partes.extend(f"{n} {k}" for k, n in sorted(resultado.skipped.items()))
@@ -640,7 +725,7 @@ def _cmd_audit(since: str | None, export_fmt: str | None, output: str | None) ->
             return EXIT_CONFIG
         if limite.tzinfo is None:
             # los ts de auditoría son aware: comparar con naive era TypeError
-            # crudo (auditoría 2026-09) — una fecha sin zona es UTC
+            # crudo (robustez) — una fecha sin zona es UTC
             limite = limite.replace(tzinfo=UTC)
         registros = [r for r in registros if r.ts >= limite]
 
@@ -694,7 +779,7 @@ def _export_audit(registros: list, destino: Path, fmt: str) -> None:
         }
         for r in registros
     ]
-    # 0600 DESDE LA CREACIÓN (2ª auditoría P1: write_text + chmod final dejaba
+    # 0600 DESDE LA CREACIÓN (robustez write_text + chmod final dejaba
     # los peer_ids world-readable durante toda la escritura, y para siempre si
     # había crash) + neutralización de fórmulas (reason puede traer texto de
     # terceros vía excepciones)
@@ -728,7 +813,7 @@ def _cmd_doctor(log_path: Path) -> int:
     import platform
 
     print(f"tg-sentry {tg_sentry.__version__}")
-    print(f"  Python {platform.python_version()} · Telethon {telethon.__version__}")
+    print(f"  Python {platform.python_version()} · Telethon {version_telethon()}")
     print(f"  log activo: {log_path}")
 
     checks: list[tuple[str, str, bool]] = []

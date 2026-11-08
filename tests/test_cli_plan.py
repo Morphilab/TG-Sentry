@@ -74,7 +74,7 @@ def test_plan_sin_cache(tmp_path: Path, monkeypatch, capsys) -> None:
 def test_plan_whitelist_malformada_rechazada_sin_traceback(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    """4ª auditoría: "--77" en la whitelist se rechaza EN LA CARGA de config
+    """"--77" en la whitelist se rechaza EN LA CARGA de config
     (validador de SafetySection) con mensaje accionable y EXIT_CONFIG."""
     _setup_env(tmp_path, monkeypatch)
     inventory.store(_to_infos(), inventory.db_path(), me_id=42)
@@ -89,3 +89,39 @@ def test_plan_whitelist_malformada_rechazada_sin_traceback(
     )
     assert codigo == EXIT_CONFIG
     assert "whitelist" in capsys.readouterr().err
+
+
+def test_plan_y_export_con_db_corrupta_salen_config_sin_traceback(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """fetched_at/is_stale/cache_age corrían FUERA del try de
+    CacheIncompatible (solo load()/me_id() estaban blindados) — una DB
+    corrupta salía por el excepthook con traceback en vez del EXIT_CONFIG
+    limpio que reciben las demás lecturas."""
+    _setup_env(tmp_path, monkeypatch)
+    db = inventory.db_path()
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db.write_bytes(b"esto no es sqlite")
+
+    codigo = main(["plan", "--output", str(tmp_path / "p.json")])
+    assert codigo == EXIT_CONFIG
+    assert "error:" in capsys.readouterr().err
+
+    codigo = main(["export", "--format", "csv"])
+    assert codigo == EXIT_CONFIG
+    assert "error:" in capsys.readouterr().err
+
+
+def test_plan_avisa_contactos_inactivos_sin_meta(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """protect_contacts activo + caché sin meta contact_ids
+    (versión vieja) — fail-open VISIBLE con camino accionable."""
+    _setup_env(tmp_path, monkeypatch)
+    inventory.store(_to_infos(), inventory.db_path(), me_id=42)
+
+    salida = tmp_path / "plan.json"
+    codigo = main(["plan", "--filter", "kinds=bot", "--output", str(salida)])
+    assert codigo == EXIT_OK  # el plan sigue: es un aviso, no una negativa
+    err = capsys.readouterr().err
+    assert "protect_contacts" in err and "INACTIVA" in err

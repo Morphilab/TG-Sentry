@@ -156,7 +156,7 @@ def test_cleanup_se_aplica_al_registrar(tmp_path: Path) -> None:
 
 
 def test_audit_since_naive_no_revienta(tmp_path: Path, monkeypatch) -> None:
-    """P1 (CLI): `audit --since 2026-09-19` era TypeError naive vs aware."""
+    """`audit --since 2026-09-19` era TypeError naive vs aware."""
     from tg_sentry import __main__ as cli
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
@@ -169,7 +169,7 @@ def test_audit_since_naive_no_revienta(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_cache_de_lectura_ve_los_appends_posteriores(tmp_path: Path) -> None:
-    """2ª auditoría: la caché por huella NUNCA puede servir registros
+    """la caché por huella NUNCA puede servir registros
     previos a un record() propio (el presupuesto se contaría de menos)."""
     log = AuditLog(tmp_path, rotate_bytes=10**9, keep_days=90)
     record_outcome("p", 1, "delete_chat", StepOutcome.DONE, audit=log)
@@ -181,7 +181,7 @@ def test_cache_de_lectura_ve_los_appends_posteriores(tmp_path: Path) -> None:
 
 
 def test_lectura_tolera_gz_corrupto_por_bitrot(tmp_path: Path) -> None:
-    """2ª auditoría: bit-rot dentro del deflate lanza zlib.error (NO OSError):
+    """bit-rot dentro del deflate lanza zlib.error (NO OSError):
     antes read() reventaba entero y con él el presupuesto anti-baneo."""
     import gzip as gz
 
@@ -202,24 +202,39 @@ def test_lectura_tolera_gz_corrupto_por_bitrot(tmp_path: Path) -> None:
     assert isinstance(registros, list)
 
 
-def test_cleanup_borra_rotando_huerfano(tmp_path: Path) -> None:
-    """2ª auditoría: un .rotando huérfano (crash entre rename y compresión)
-    se re-leía para siempre y violaba keep_days."""
+def test_cleanup_respeta_rotando_sin_compañero(tmp_path: Path) -> None:
+    """la regla de 1h DESTRUÍA la única copia de una
+    compresión fallida a la primera hora (conteo de topes degradado hacia
+    lo peligroso). Nuevo contrato: un .rotando se retira solo si (a) sus
+    registros pasaron keep_days, o (b) existe su .gz compañero (redundante
+    por crash entre replace y unlink); sin compañero y dentro de la
+    retención, se conserva y _rotate lo reintenta."""
     from datetime import UTC, datetime
 
-    viejo = tmp_path / "audit.jsonl.20200101-000000-000000-1.rotando"
+    # único, reciente: se CONSERVA
+    unico = tmp_path / "audit.jsonl.20990101-000000-000000-1.rotando"
+    unico.write_text("{}\n", encoding="utf-8")
+    # único, VIEJO (sus registros pasaron keep_days=90): se retira
+    viejo = tmp_path / "audit.jsonl.20200101-000000-000000-2.rotando"
     viejo.write_text("{}\n", encoding="utf-8")
-    os_utime = viejo.stat().st_mtime - 2 * 24 * 3600  # 2 días
+    # redundante (compresión completada + crash antes del unlink): se retira
+    redundante = tmp_path / "audit.jsonl.20990101-000000-000000-3.rotando"
+    redundante.write_text("{}\n", encoding="utf-8")
+    (tmp_path / "audit-20990101-000000-000000-3.jsonl.gz").write_bytes(b"x")
     import os as _os
 
-    _os.utime(viejo, (os_utime, os_utime))
+    ahora = datetime.now(UTC)
+    _os.utime(viejo, ((ahora - timedelta(days=91)).timestamp(),) * 2)
     log = AuditLog(tmp_path, rotate_bytes=10**9, keep_days=90)
-    borrados = log.cleanup(now=datetime.now(UTC))
-    assert borrados >= 1 and not viejo.exists()
+    borrados = log.cleanup(now=ahora)
+    assert not viejo.exists()
+    assert not redundante.exists()
+    assert unico.exists()
+    assert borrados == 2
 
 
 def test_rotacion_fallida_conserva_rotando(tmp_path: Path) -> None:
-    """P2 3ª auditoría: un fallo de compresión (disco lleno, EIO) NO destruye
+    """un fallo de compresión (disco lleno, EIO) NO destruye
     la única copia del histórico — antes el finally borraba el .rotando y los
     registros se perdían (conteo de límites degradado hacia lo peligroso)."""
     import tg_sentry.audit as audit_mod
@@ -250,7 +265,7 @@ def test_rotacion_fallida_conserva_rotando(tmp_path: Path) -> None:
 
 
 def test_gz_rotado_nace_0600(tmp_path: Path) -> None:
-    """P2 3ª auditoría: los .gz rotados nacían con umask (0644) y jamás se
+    """los .gz rotados nacían con umask (0644) y jamás se
     les aplicaba chmod — el histórico completo de peer_ids quedaba legible."""
     audit = AuditLog(tmp_path, rotate_bytes=200, keep_days=90)
     for i in range(4):
@@ -261,7 +276,7 @@ def test_gz_rotado_nace_0600(tmp_path: Path) -> None:
 
 
 def test_activo_nace_0600_y_linea_json_rota_se_logea(tmp_path: Path, caplog) -> None:  # type: ignore[no-untyped-def]
-    """P3 3ª auditoría: el activo nace 0600 (no chmod-posterior). Y una línea
+    """el activo nace 0600 (no chmod-posterior). Y una línea
     con JSON roto se descarta CON log (el docstring lo promete; degradaba el
     conteo de límites en silencio)."""
     audit = AuditLog(tmp_path, rotate_bytes=10 * 1024 * 1024, keep_days=90)
@@ -275,3 +290,89 @@ def test_activo_nace_0600_y_linea_json_rota_se_logea(tmp_path: Path, caplog) -> 
         registros = audit.read()
     assert len(registros) == 1
     assert any("JSON roto" in r.message for r in caplog.records)
+
+
+def test_cleanup_borra_gz_tmp_huerfano(tmp_path: Path) -> None:
+    """un crash duro (SIGKILL/corte de luz) a mitad de
+    compresión deja audit-*.jsonl.gz.tmp que el except del rotate nunca
+    retiraba — basura acumulada para siempre (el contenido parcial NO entra
+    en read(), así que solo era suciedad, pero violaba la retención)."""
+    from datetime import UTC, datetime
+
+    viejo = tmp_path / "audit-20200101-000000-000000-1.jsonl.gz.tmp"
+    viejo.write_bytes(b"parcial")
+    import os as _os
+
+    mtime = viejo.stat().st_mtime - 2 * 3600  # 2 horas
+    _os.utime(viejo, (mtime, mtime))
+    log = AuditLog(tmp_path, rotate_bytes=10**9, keep_days=90)
+    assert log.cleanup(now=datetime.now(UTC)) >= 1
+    assert not viejo.exists()
+
+
+def test_rotacion_fallida_reintenta_en_la_siguiente(tmp_path: Path) -> None:
+    """el .rotando conservado por una compresión fallida
+    se REINTENTA en la rotación siguiente — el log de la 3ª auditoría lo
+    prometía («reintentará al superar el umbral de nuevo»), pero el
+    reintento no existía y cleanup destruía la única copia a 1h."""
+    import tg_sentry.audit as audit_mod
+
+    audit = AuditLog(tmp_path, rotate_bytes=200, keep_days=90)
+    for i in range(4):
+        audit.record(_record(peer=i))
+    original = audit_mod.gzip.GzipFile
+
+    class _Roto:  # compresión que revienta (p. ej. ENOSPC)
+        def __init__(self, *a, **k):  # type: ignore[no-untyped-def]
+            raise OSError("No space left on device")
+
+    audit_mod.gzip.GzipFile = _Roto  # type: ignore[assignment,misc]
+    try:
+        with pytest.raises(OSError):
+            audit.record(_record(peer=99))
+    finally:
+        audit_mod.gzip.GzipFile = original  # type: ignore[assignment]
+    rotando = list(tmp_path.glob("*.rotando"))
+    assert rotando, "la copia .rotando DEBE conservarse"
+    # cleanup NO toca la única copia (reciente, sin compañero)
+    assert audit.cleanup() == 0
+    assert rotando[0].exists()
+    # la siguiente rotación reintenta el pendiente y comprime TODO
+    for i in range(4):
+        audit.record(_record(peer=1000 + i))
+    assert list(tmp_path.glob("*.rotando")) == []
+    assert list(tmp_path.glob("audit-*.jsonl.gz"))
+    # sin doble conteo: 4 del pendiente + 4 nuevos (el record fallido de
+    # peer=99 jamás se escribió — la rotación aborta antes del append)
+    assert len(audit.read()) == 8
+
+
+def test_gz_podrido_conserva_el_prefijo(tmp_path: Path) -> None:
+    """bit-rot a mitad de un .gz — antes el fallo
+    descartaba TODO el archivo (subconteo de topes en silencio); el
+    prefijo ya validado se conserva (pérdida acotada al último bloque
+    de lectura, no al archivo entero)."""
+    # ~200 registros: la corrupción cae MÁS ALLÁ del primer bloque de
+    # lectura (4096) — con 6 registros todo cabía en el primer read y el
+    # prefijo no se ejercitaba
+    lineas = [_record(peer=i) for i in range(200)]
+    podrido = tmp_path / "audit-20250101-000000-000000-9.jsonl.gz"
+    with gzip.open(podrido, "wt", encoding="utf-8") as handle:
+        for registro in lineas:
+            handle.write(registro.model_dump_json() + "\n")
+    data = bytearray(podrido.read_bytes())
+    mitad = len(data) // 2
+    for i in range(mitad, min(mitad + 64, len(data))):
+        data[i] ^= 0xFF
+    podrido.write_bytes(bytes(data))
+
+    audit = AuditLog(tmp_path, rotate_bytes=10**9, keep_days=90)
+    registros = audit.read()
+    # contratos que deben hold sin importar DÓNDE caiga la corrupción
+    # (varía por corrida: los ts cambian el tamaño comprimido): nunca
+    # pérdida TOTAL (antes: 0 registros del archivo entero), lo legible
+    # es un PREFIJO íntegro y sin duplicados
+    assert registros, "el prefijo legible del .gz dañado debe conservarse"
+    ids = [r.peer_id for r in registros]
+    assert ids == list(range(len(ids)))  # prefijo contiguo de peers 0..N
+    assert len(set(ids)) == len(ids)  # sin doble conteo

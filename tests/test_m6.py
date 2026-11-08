@@ -316,7 +316,7 @@ def test_delete_own_fallo_parcial_adjunta_conteo() -> None:
 
 def test_gateway_teleops_propaga_conteo() -> None:
     """El gateway REAL debe devolver el conteo: sin él el cooldown proporcional
-    era código muerto en producción (auditoría 2026-09, P2)."""
+    no tiene efecto."""
 
     async def run() -> None:
         client = _OwnClient(n_mensajes=120)  # el paso acota a 100 por defecto
@@ -334,7 +334,7 @@ def _peer(pid: int):  # type: ignore[no-untyped-def]
 
 
 def test_export_audit_nace_0600_desde_la_creacion(tmp_path: Path) -> None:
-    """2ª auditoría P1: el export de auditoría (peer_ids + razones) nacía con
+    """el export de auditoría (peer_ids + razones) nacía con
     umask (0644) y el chmod llegaba al final — un crash dejaba los datos
     personales world-readable PARA SIEMPRE. Misma cura que el export de
     inventario: os.open con 0600 en la creación."""
@@ -362,7 +362,7 @@ def test_export_audit_nace_0600_desde_la_creacion(tmp_path: Path) -> None:
 
 
 def test_export_audit_csv_neutraliza_formulas(tmp_path: Path) -> None:
-    """2ª auditoría: reason puede traer texto de terceros (mensajes de
+    """reason puede traer texto de terceros (mensajes de
     excepción); el CSV de auditoría no neutralizaba fórmulas."""
     from tg_sentry.__main__ import _export_audit
 
@@ -375,7 +375,7 @@ def test_export_audit_csv_neutraliza_formulas(tmp_path: Path) -> None:
 
 
 def test_export_audit_default_lleva_microsegundos(tmp_path: Path, monkeypatch):  # type: ignore[no-untyped-def]
-    """2ª auditoría: dos exports del mismo formato en el mismo segundo se
+    """dos exports del mismo formato en el mismo segundo se
     truncaban entre sí en silencio (open 'w' trunca)."""
     import re
 
@@ -390,7 +390,7 @@ def test_export_audit_default_lleva_microsegundos(tmp_path: Path, monkeypatch): 
 
 
 def test_delete_own_for_me_rechazado_en_entidad_canal() -> None:
-    """P1 auditoría 3: Telethon enruta canales/SUPERGRUPOS a
+    """Telethon enruta canales/SUPERGRUPOS a
     channels.DeleteMessagesRequest SIN revoke — 'solo para ti' borraría para
     todos. El guard lo rechaza ANTES de tocar la API."""
     async def run() -> None:
@@ -426,5 +426,27 @@ def test_delete_own_conteo_real_pts_count() -> None:
         client = _ClientePts(n_mensajes=250)
         borrados = await delete_own_messages(client, 77, for_all=False, max_messages=250)
         assert borrados == 125  # (50 + 50 + 25) vía pts_count, NO el fallback 250
+
+    asyncio.run(run())
+
+
+def test_delete_own_me_rechaza_input_peer_channel_from_message() -> None:
+    """Defensa en profundidad: InputPeerChannelFromMessage NO
+    hereda de InputPeerChannel, pero Telethon enruta delete_messages por
+    nombre de clase a channels.DeleteMessages (SIN revoke: borra SIEMPRE
+    para todos). El guard del modo 'solo para ti' lo rechaza también."""
+    from telethon.tl.types import InputPeerChannelFromMessage, InputPeerEmpty
+
+    async def run() -> None:
+        class _ClienteFromMessage(_OwnClient):
+            async def get_input_entity(self, peer: int):  # type: ignore[no-untyped-def]
+                return InputPeerChannelFromMessage(
+                    peer=InputPeerEmpty(), msg_id=1, channel_id=123
+                )
+
+        client = _ClienteFromMessage(n_mensajes=50)
+        with pytest.raises(UnsupportedStep):
+            await delete_own_messages(client, -100123, for_all=False)
+        assert client.delete_calls == []  # jamás llegó a iterar ni borrar
 
     asyncio.run(run())

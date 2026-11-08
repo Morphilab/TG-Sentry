@@ -20,8 +20,12 @@ coordinado.
 - Filtración de secretos (api_id/api_hash, teléfono, session strings, códigos
   2FA) hacia logs, auditoría o exports.
 - Cualquier ruta que permita operar sobre peers blindados (propia cuenta,
-  777000, whitelist, chats secretos, chats donde eres creador, contactos
-  protegidos).
+  777000, whitelist, chats secretos, contactos protegidos — la protección
+  de contactos requiere una caché refrescada por una versión que guarde
+  tus contactos; si falta, queda inactiva y plan/apply lo avisan). La
+  exclusión por rol de creador NO está activa hoy: el rol no se verifica
+  (ver README y `docs/telegram-limits.md`) — operar sobre un chat propio
+  donde eres creador es posible y solo genera un aviso informativo.
 - Fallos que permitan superar los topes anti-baneo (token bucket, topes de
   sesión 50/h y 200/día) o que corrompan la auditoría en dirección
   "contar de menos".

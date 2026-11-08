@@ -5,11 +5,11 @@ módulo (y en tg/client.py). Ningún otro paquete toca objetos de Telethon.
 
 Lectura: `to_dialog_info` mapea un Dialog al modelo.
 Escritura: `execute_step` ejecuta un paso del plan con el cliente y traduce
-las excepciones de Telethon a la taxonomía neutra de `tg_sentry.errors`
-(semánticas a confirmar en el piloto — protocolo en documentación interna).
+las excepciones de Telethon a la taxonomía neutra de `tg_sentry.errors`.
 
 `clear_history` (vaciar historial SIN salir) no tiene primitiva segura
-verificada en Telethon 1.x: queda UnsupportedStep hasta el piloto.
+verificada en Telethon 1.x: queda UnsupportedStep hasta verificar la
+primitiva.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from telethon.errors import (
     UserNotParticipantError,
 )
 from telethon.tl.functions.contacts import BlockRequest, GetContactsRequest
-from telethon.tl.types import InputPeerChannel
+from telethon.tl.types import InputPeerChannel, InputPeerChannelFromMessage
 
 from tg_sentry.errors import (
     AdminRequired,
@@ -47,7 +47,7 @@ from tg_sentry.models import DialogInfo, PeerKind
 from tg_sentry.planner import StepKind
 
 # Timeout duro por paso: un RPC colgado (NAT drop sin RST) no puede bloquear
-# el ejecutor para siempre (auditoría 2026-09). Generoso: cubre lotes de 100.
+# el ejecutor para siempre (robustez). Generoso: cubre lotes de 100.
 STEP_TIMEOUT_S = 120.0
 
 
@@ -93,7 +93,7 @@ async def execute_step(client: object, step: StepKind, dialog: DialogInfo) -> in
 
     Devuelve None normalmente; en pasos DELETE_OWN_* devuelve el número de
     mensajes borrados (el motor lo usa para métricas Y cooldown proporcional:
-    los gateways de producción DEBEN propagarlo — auditoría 2026-09). Se
+    los gateways de producción DEBEN propagarlo — robustez). Se
     resuelve el peer por id marcado (la sesión Telethon lo resuelve desde su
     caché); los errores de resolución se tratan como peer inaccesible.
 
@@ -111,7 +111,7 @@ async def execute_step(client: object, step: StepKind, dialog: DialogInfo) -> in
         # SlowModeWaitError (420); las dos últimas NO heredan de FloodWaitError
         # y antes caían a reintentos de 1-2s sin respetar la espera exigida.
         # Piso 1s: FloodWait(0) (capture vacío) con el motor era un bucle
-        # caliente martilleando Telegram (2ª auditoría).
+        # caliente martilleando Telegram (robustez).
         # FrozenMethodInvalidError (cuenta congelada) es el único FloodError
         # SIN .seconds: es determinista y no se "espera" — mapea a
         # AdminRequired (fallo del ítem sin bucle) en vez de AttributeError.
@@ -132,16 +132,16 @@ async def execute_step(client: object, step: StepKind, dialog: DialogInfo) -> in
     except ChatAdminRequiredError as exc:
         raise _traducida(AdminRequired(str(exc)), exc) from exc
     except AuthKeyDuplicatedError as exc:
-        # auth key duplicada: TERMINAL por diseño (2ª auditoría: caía a
+        # auth key duplicada: TERMINAL por diseño (robustez: caía a
         # RpcFailure y quemaba 5 reintentos por ítem con la sesión rota)
         raise _traducida(SessionInvalid(str(exc)), exc) from exc
     except UnauthorizedError as exc:
         # sesión revocada / auth key inválida: determinista y terminal;
-        # reintentar solo quema el presupuesto (auditoría 2026-09)
+        # reintentar solo quema el presupuesto (robustez)
         raise _traducida(SessionInvalid(str(exc)), exc) from exc
     except InvalidBufferError as exc:
         # buffer corrupto del servidor NO hereda de RPCError/OSError: salía
-        # cruda y el motor la trataba como bug sin reintento (2ª auditoría).
+        # cruda y el motor la trataba como bug sin reintento (robustez).
         # Con code 404 el sender la trata como auth key muerta → terminal.
         if getattr(exc, "code", None) == 404:
             raise _traducida(SessionInvalid(str(exc)), exc) from exc
@@ -151,10 +151,10 @@ async def execute_step(client: object, step: StepKind, dialog: DialogInfo) -> in
         raise _traducida(RpcFailure(f"{type(exc).__name__}: {exc}"), exc) from exc
     except ValueError as exc:
         # resolución de entidad fallida (peer fuera de la caché de sesión):
-        # el docstring lo promete y antes se colaba crudo (auditoría 2026-09).
+        # el docstring lo promete y antes se colaba crudo (robustez).
         # Un ValueError que NO es de resolución era tragado como peer inválido
         # (bug invisible → skipped_unreachable); ahora es RpcFailure del ítem
-        # con reintentos y el mensaje visible (2ª auditoría).
+        # con reintentos y el mensaje visible (robustez).
         if "input entity" in str(exc) or "Could not find" in str(exc):
             raise _traducida(PeerGone("peer_invalid"), exc) from exc
         raise _traducida(RpcFailure(f"ValueError: {exc}"), exc) from exc
@@ -168,7 +168,7 @@ async def execute_step(client: object, step: StepKind, dialog: DialogInfo) -> in
     except OSError as exc:  # TimeoutError/ConnectionError ya cubiertos arriba
         raise _traducida(TransientNetwork(str(exc)), exc) from exc
     except Exception as exc:
-        # Red de seguridad (2ª auditoría): una excepción de Telethon sin
+        # Red de seguridad (robustez): una excepción de Telethon sin
         # mapear (TypeNotFoundError, BadMessageError, SecurityError, …)
         # NUNCA sale cruda — antes reventaba el motor como "error inesperado"
         # sin reintentos. RpcFailure: 5 reintentos con backoff y, si sigue,
@@ -180,8 +180,8 @@ async def execute_step(client: object, step: StepKind, dialog: DialogInfo) -> in
 def _traducida(nuestra: Exception, original: BaseException) -> Exception:
     """Copia los adjuntos dinámicos de la excepción ORIGINAL (p. ej. el
     conteo `tg_sentry_borrados_parciales` de delete_own_messages) a la
-    traducida. Sin esto el conteo moría en la traducción y el cooldown
-    proporcional era código muerto en producción (2ª auditoría, P1)."""
+    traducida. Sin esto el conteo se pierde en la traducción y el cooldown
+    proporcional no tiene efecto."""
     parcial = getattr(original, "tg_sentry_borrados_parciales", None)
     if isinstance(parcial, int):
         nuestra.tg_sentry_borrados_parciales = parcial  # type: ignore[attr-defined]
@@ -222,28 +222,34 @@ async def delete_own_messages(
       48h el SERVIDOR degrada automáticamente a solo-para-ti (privados y
       grupos). Jamás es error: el degradado cuenta como solo-para-ti.
     - for_all=False → revoke=False: SOLO para ti, siempre, sin límite de edad
-      — PERO solo en chats privados, bots y grupos BÁSICOS. En canales y
+ — PERO solo en chats privados, bots y grupos BÁSICOS. En canales y
       supergrupos la API borra SIEMPRE para todos (delete_messages enruta a
       channels.DeleteMessagesRequest, que no admite revoke): con for_all=False
       el paso se RECHAZA con UnsupportedStep antes de tocar nada (jamás se
       ejecuta un borrado "solo para ti" que el servidor haría para todos).
 
     Devuelve el total de mensajes borrados (pts_count REAL del servidor;
-    auditoría 2026-09). El tope max_messages acota cada ejecución (lotes de
+    robustez). El tope max_messages acota cada ejecución (lotes de
     100 = 1 request cada uno). Si un lote falla a mitad, el conteo parcial
     viaja adjunto a la excepción (`tg_sentry_borrados_parciales`) para que
     el motor aplique cooldown aunque el paso acabe en failed.
     """
     if not for_all:
         entidad = await client.get_input_entity(peer)  # type: ignore[attr-defined]
-        if isinstance(entidad, InputPeerChannel):
+        # Telethon enruta delete_messages a channels.DeleteMessages (SIN
+        # revoke: borra SIEMPRE para todos) con helpers._entity_type, que
+        # clasifica por nombre: InputPeerChannelFromMessage NO hereda de
+        # InputPeerChannel y pasaría un guard de una sola clase (5ª
+        # auditoría, defensa en profundidad — esta ruta nunca produce
+        # entidades FromMessage, pero el guard no debe depender de eso)
+        if isinstance(entidad, (InputPeerChannel, InputPeerChannelFromMessage)):
             msg = (
                 "delete_own 'solo para ti' no es posible en canales/supergrupos: "
                 "la API borra siempre para todos. Usa delete_own 'all' o leave=False."
             )
             raise UnsupportedStep(msg)
     # reverse=True: la API itera de MÁS NUEVO a más viejo por defecto; el
-    # contrato del paso es lo más viejo primero (auditoría 2026-09, P2).
+    # contrato del paso es lo más viejo primero (robustez).
     ids: list[int] = []
     async for message in client.iter_messages(  # type: ignore[attr-defined]
         peer, from_user="me", limit=max_messages, reverse=True
@@ -275,8 +281,31 @@ async def contact_user_ids(client: object) -> set[int]:
     falla, el error sube (el refresh aborta) — un fallo de contactos jamás
     degrada la protección en silencio.
     """
-    result = await client(GetContactsRequest(hash=""))  # type: ignore[operator]
+    # hash=0 (int64 vacío) = lista COMPLETA. El TL exige int: hash="" era
+    # struct.error ANTES de salir a red (el refresh fallaba siempre y la meta
+    # contact_ids nunca se poblaba — la protección no tenía efecto real).
+    # El type: ignore[operator] es por client: object no-callable (mismo
+    # patrón que BlockRequest), NO por el hash: el contrato int queda visible
+    # para mypy.
+    result = await client(GetContactsRequest(hash=0))  # type: ignore[operator]
     return {user.id for user in getattr(result, "users", []) or []}
+
+
+async def own_id(client: object) -> int:
+    """Id de la cuenta VIVA de la sesión conectada (get_me, solo lectura).
+
+    Verificación de identidad al ARRANCAR la ejecución (robustez):
+    comparar el plan contra el me_id de la caché era caché-vs-caché — un
+    swap de sesión (TG_SENTRY_STRING_SESSION o session= del TOML) con la
+    caché sin refrescar ejecutaba el plan de la cuenta A contra la cuenta
+    B. La identidad en el momento destructivo sale de la SESIÓN, no del
+    inventario.
+    """
+    me = await client.get_me()  # type: ignore[attr-defined]
+    propio = getattr(me, "id", None)
+    if not propio:
+        raise RuntimeError("get_me no devolvió el id de la cuenta")
+    return int(propio)
 
 
 class TeleOpsGateway:
@@ -287,5 +316,5 @@ class TeleOpsGateway:
 
     async def run_step(self, step: StepKind, dialog: DialogInfo) -> int | None:
         # PROPAGA el conteo de borrados: sin él el cooldown proporcional
-        # (M6.2) era código muerto en producción — auditoría 2026-09, P2.
+        # no tiene efecto.
         return await execute_step(self._client, step, dialog)

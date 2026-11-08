@@ -28,7 +28,7 @@ THREAD_NAME = "tg-sentry-telethon"
 
 # Techo duro por llamada puentada. Generoso a propósito (refresh de cientos
 # de diálogos, lotes de borrado propios): nunca debe dispararse en uso
-# normal. Cierra el hueco TOCTOU residual (2ª auditoría): el hilo puede morir
+# normal. Cierra el hueco TOCTOU residual (robustez): el hilo puede morir
 # ENTRE el check de abajo y el run_coroutine_threadsafe — el futuro jamás se
 # resuelve y el await se cuelga eternamente, el deadlock exacto que este
 # módulo promete prevenir.
@@ -55,7 +55,7 @@ class TelethonRuntime:
         Las excepciones cruzan el puente intactas (wrap_future). Si el hilo
         del runtime MURIÓ sin cerrar el loop (excepción en _bombeo), falla
         ALTO en vez de colgar para siempre en un futuro jamás resuelto
-        (auditoría 2026-09).
+        (robustez).
         """
         if self._loop.is_closed() or not self._thread.is_alive():
             msg = "runtime de Telethon no disponible (cerrado o hilo muerto)"
@@ -73,12 +73,18 @@ class TelethonRuntime:
             )
             raise RuntimeError(msg) from None
 
+    @property
+    def vivo(self) -> bool:
+        """True si el loop vive y el hilo no murió (barrera de entrada para
+        no instanciar coroutines contra un runtime muerto)."""
+        return not self._loop.is_closed() and self._thread.is_alive()
+
     def shutdown(self) -> None:
         """Detiene el loop y recoge el hilo (idempotente, robusto).
 
         Si el hilo no para en el timeout NO se hace close() de un loop en
         ejecución (RuntimeError al salir de la TUI): se registra y se deja
-        que el proceso termine (el hilo es daemon) — auditoría 2026-09.
+        que el proceso termine (el hilo es daemon) — robustez.
         """
         if self._loop.is_closed():
             return
@@ -108,6 +114,14 @@ class BridgedGateway:
 
     async def run_step(self, step: StepKind, dialog: DialogInfo) -> int | None:
         # PROPAGA el conteo de borrados (cooldown proporcional, M6.2):
-        # antes se descartaba y el motor asumía lo conservador — auditoría 2026-09.
+        # antes se descartaba y el motor asumía lo conservador — robustez.
+        # robustez: check de barrera ANTES de crear la coroutine — si el
+        # runtime murió, execute_step(...) ni se instancia (una coroutine
+        # creada y jamás awaited es el patrón que la robustez cerró en
+        # los workers de la TUI; call() mantiene su propio check TOCTOU).
+        if not self._runtime.vivo:
+            raise RuntimeError(
+                "runtime de Telethon no disponible (cerrado o hilo muerto)"
+            )
         conteo = await self._runtime.call(execute_step(self._client, step, dialog))
         return conteo if isinstance(conteo, int) else None

@@ -9,7 +9,9 @@ from pydantic import BaseModel, ConfigDict
 
 
 class PeerKind(StrEnum):
-    """Tipo de peer. SECRET se detecta/marca pero NUNCA se opera (no soportado)."""
+    """Tipo de peer. SECRET: los chats secretos NO aparecen en el inventario
+    (Telethon no los itera) y safety los excluye de todos modos — cinturón
+    extra para planes manipulados, no una protección activa del pipeline."""
 
     BOT = "bot"
     USER = "user"

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tg-sentry"
-version = "0.1.0"
+version = "0.1.1"
 description = "Monitor y limpiador de cuenta de Telegram — seguro por diseño (dry-run por defecto, auditoría, límites anti-baneo)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
-    # Versiones FIJAS (decisión documentada internamente; sin rangos):
+    # Versiones FIJAS (decisión de proyecto; sin rangos):
     # mantenimiento reducido de Telethon desde ~2023 → sin rangos, revisión a 6 meses.
     "telethon==1.45.0",
     "textual==8.2.8",
@@ -45,6 +45,28 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tg_sentry"]
+
+# El sdist es un artefacto PUBLICABLE: hatchling no ve .git/info/exclude y,
+# sin allowlist, empaqueta archivos no trackeados del árbol de trabajo.
+# Allowlist explícita: cualquier archivo futuro ajeno a esta lista NO viaja.
+# Verificación pre-publicación: uv build && tar -tzf dist/*.tar.gz y revisar
+# que solo aparezcan las rutas listadas abajo.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+    "/.github",
+    "/README.md",
+    "/README.es.md",
+    "/SECURITY.md",
+    "/LICENSE",
+    "/config.example.toml",
+    "/pyproject.toml",
+    "/uv.lock",
+    "/.python-version",
+    "/.gitignore",
+]
 
 [tool.ruff]
 line-length = 100

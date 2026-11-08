@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fakes import FakeSessionClient
 from tests.test_inventory import _to_infos
 from tg_sentry import inventory
 from tg_sentry.audit import AuditLog, AuditRecord, StepOutcome
@@ -142,7 +143,7 @@ async def test_execute_con_barra_y_resultados(entorno: Path, monkeypatch) -> Non
 
     class FakeApp(SentryApp):
         async def get_client(self):  # type: ignore[no-untyped-def]
-            return object()
+            return FakeSessionClient(me_id=42)
 
         @property
         def runtime(self):  # type: ignore[no-untyped-def]
@@ -172,7 +173,7 @@ async def test_execute_con_barra_y_resultados(entorno: Path, monkeypatch) -> Non
 
 
 async def test_settings_rechaza_whitelist_malformada_sin_guardar(entorno: Path) -> None:
-    """4ª auditoría: guardar '--77' rompería el dashboard/plan al recargar
+    """guardar '--77' rompería el dashboard/plan al recargar
     (parse_whitelist lanza ValueError sin capturar). Se rechaza EN EL
     GUARDADO con mensaje visible: la config no cambia y no se navega."""
     app = SentryApp()
@@ -194,3 +195,57 @@ async def test_settings_rechaza_whitelist_malformada_sin_guardar(entorno: Path) 
         import tg_sentry.paths as paths
 
         assert load_config(paths.config_path()).safety.whitelist == []
+
+
+def test_stderr_de_crash_de_tui_redacta_secretos() -> None:
+    """la pantalla de crash de Textual (`App._fatal_error`)
+    imprime por error_console — stderr SIN pasar por logging y con
+    show_locals=True, así que los locals de SentryApp arrastran
+    `self._config` (api_hash, teléfono) y `self._client`. El file de
+    error_console queda envuelto para redactar al vuelo (mismo estándar que
+    el excepthook del CLI de la 2ª auditoría)."""
+    import io
+
+    from tg_sentry import redact as mod_redact
+    from tg_sentry.tui.app import _StderrRedactado
+
+    mod_redact.register_secret("api-hash-de-prueba-9876")
+    app = SentryApp()
+    assert isinstance(app.error_console.file, _StderrRedactado)
+    buf = io.StringIO()
+    app.error_console.file = _StderrRedactado(buf)  # type: ignore[assignment]
+    # simula lo que _fatal_error renderiza: texto con "locals" que llevan la config
+    app.error_console.print(
+        "Traceback: self=<SentryApp _config=Config(telegram=TelegramSection("
+        "api_hash='api-hash-de-prueba-9876'))>"
+    )
+    salida = buf.getvalue()
+    assert "api-hash-de-prueba-9876" not in salida
+    assert "***REDACTED***" in salida
+
+
+async def test_settings_fallo_persistencia_no_aplica_cambios(
+    entorno: Path, monkeypatch
+) -> None:
+    """_guardar mutaba la config EN MEMORIA antes de
+    persistir — un OSError del save dejaba la sesión operando con valores
+    que la UI reportó como 'no guardado' (p. ej. whitelist reducida)."""
+    app = SentryApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        from tg_sentry.tui.screens import settings as mod_settings
+        from tg_sentry.tui.screens.settings import SettingsScreen
+
+        def reventar(*args: object, **kwargs: object) -> None:
+            raise OSError("disco lleno simulado")
+
+        monkeypatch.setattr(mod_settings, "save_config", reventar)
+        app.push_screen(SettingsScreen())
+        await pilot.pause()
+        app.screen.query_one("#s-whitelist").value = "11111"
+        await pilot.pause()
+        app.screen.query_one("#btn-guardar").press()
+        await pilot.pause()
+        assert "no guardado" in str(app.screen.query_one("#s-estado").render())
+        # la config VIVA no cambió aunque la UI había mutado los inputs
+        assert app.config.safety.whitelist != ["11111"]

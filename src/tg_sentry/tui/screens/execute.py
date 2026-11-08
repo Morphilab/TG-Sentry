@@ -59,12 +59,12 @@ class ExecuteScreen(BaseScreen):
         yield Footer()
 
     def on_mount(self) -> None:
-        # ADJUNTAR, no relanzar (P1 auditoría 2026-09): la tecla 'e' abre esta
+        # ADJUNTAR, no relanzar (robustez): la tecla 'e' abre esta
         # pantalla con el plan de la ejecución EXISTENTE — relanzarla aquí
         # reanudaba destructivamente sin CONFIRMAR. El discriminador es el
         # plan_id: mismo plan → adjuntar siempre (activa o terminada); plan
         # DISTINTO solo arranca si no hay ejecución ACTIVA (plan recién
-        # confirmado; 3ª auditoría: antes una ejecución terminada bloqueaba
+        # confirmado; robustez: antes una ejecución terminada bloqueaba
         # para siempre el siguiente plan en la misma sesión).
         actual = self.sentry_app.ejecucion
         if actual is not None and actual.plan.plan_id == self._plan.plan_id:
@@ -88,13 +88,12 @@ class ExecuteScreen(BaseScreen):
         self._refrescar()
 
     # -- render desde el estado compartido ----------------------------------
-
     def _refrescar(self) -> None:
         if self._ejecucion is None:  # pragma: no cover — asignado en on_mount
             return
         if not self.is_current:
             # pantalla suspendida bajo otra (switch_screen la deja montada):
-            # el interval sigue vivo pero no hay nada que pintar (P3 auditoría)
+            # el interval sigue vivo pero no hay nada que pintar (auditoría)
             return
         e = self._ejecucion
 
@@ -161,7 +160,7 @@ class ExecuteScreen(BaseScreen):
             from tg_sentry.tui.screens.results import ResultsScreen
 
             # resultados del plan EJECUTADO (si se adjuntó a la ejecución de
-            # otro plan, self._plan y el ejecutado no coinciden — 3ª auditoría)
+            # otro plan, self._plan y el ejecutado no coinciden — robustez)
             ejecucion = self._ejecucion
             self.sentry_app.push_screen(
                 ResultsScreen(

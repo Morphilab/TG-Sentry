@@ -14,8 +14,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any
+from typing import Any, TextIO
 
 from textual.app import App
 
@@ -32,12 +33,50 @@ from tg_sentry.executor import (
 from tg_sentry.inventory import CacheIncompatible
 from tg_sentry.limits import LimitsPolicyError, validate_policy
 from tg_sentry.planner import ActionPlan, StepKind, blindados_en_plan
+from tg_sentry.redact import redact as _redactar
 from tg_sentry.runstate import CompletedStep, load_completed, save, step_key
+from tg_sentry.tg.ops import own_id
 from tg_sentry.tg.runtime import BridgedGateway, TelethonRuntime
 from tg_sentry.tui.base import BaseScreen
 from tg_sentry.tui.ejecucion import Ejecucion
 
 logger = logging.getLogger(__name__)
+
+
+class _StderrRedactado:
+    """File-wrapper que redacta cada write contra el registro global.
+
+    La pantalla de crash de Textual (`App._fatal_error` → rich Traceback con
+    show_locals=True → error_console, stderr SIN pasar por logging) vuelca los
+    locals de los métodos de SentryApp: `self._config` arrastra api_hash y
+    teléfono, `self._client` es el cliente Telethon vivo. El excepthook del
+    CLI redacta vía logging (robustez); esta vía de la TUI quedaba fuera.
+    Redactar en el propio file cierra la fuga para TODO lo que Textual
+    imprima por error_console (robustez).
+    """
+
+    def __init__(self, destino: TextIO) -> None:
+        self._destino = destino
+
+    def write(self, texto: str) -> int:
+        return self._destino.write(_redactar(texto))
+
+    def flush(self) -> None:
+        self._destino.flush()
+
+    def isatty(self) -> bool:
+        try:
+            return bool(self._destino.isatty())
+        except (AttributeError, ValueError, OSError):
+            return False
+
+    def fileno(self) -> int:
+        # rich consulta fileno para detectar terminal; si el destino no lo
+        # tiene (capturas de test), el contrato de rich es AttributeError
+        fileno = getattr(self._destino, "fileno", None)
+        if fileno is None:
+            raise AttributeError("el destino no tiene fileno")
+        return int(fileno())
 
 
 class SentryApp(App[None]):
@@ -89,6 +128,10 @@ class SentryApp(App[None]):
         self._client: object | None = None
         self._runtime = TelethonRuntime()
         self.ejecucion: Ejecucion | None = None
+        # La ruta de crash de Textual imprime por error_console (stderr) sin
+        # pasar por logging: redacta al vuelo (robustez). El setter
+        # de Console.file es API pública de rich (textual no lo re-exporta).
+        self.error_console.file = _StderrRedactado(sys.stderr)  # type: ignore[assignment]
 
     @property
     def config(self) -> Config:
@@ -110,7 +153,7 @@ class SentryApp(App[None]):
         JAMÁS interactúa: si la sesión no está autorizada lanza
         SesionNoAutorizada (el camino es la pantalla login; connect_and_login
         usa prompts bloqueantes que dentro de la TUI congelan la UI —
-        hallazgo auditoría 2026-09).
+        hallazgo robustez).
         """
         if self._client is None:
             from tg_sentry.tg.client import connect_cliente_autorizado
@@ -140,7 +183,7 @@ class SentryApp(App[None]):
 
         Una config corrupta NO abre el dashboard: ErrorScreen con el mensaje
         accionable (antes el ConfigError reventaba en on_mount con la pantalla
-        de crash de Textual — auditoría 2026-09).
+        de crash de Textual — robustez).
         """
         import tg_sentry.paths as paths
 
@@ -158,25 +201,19 @@ class SentryApp(App[None]):
 
         return LoginScreen()
 
-    async def close_client(self) -> None:
-        if self._client is not None:
-            cliente, self._client = self._client, None
-            with contextlib.suppress(RuntimeError):  # runtime ya cerrándose
-                await self.telethon_call(cliente.disconnect())  # type: ignore[attr-defined]
-
     async def on_exit_app(self) -> None:
-        """Cierre ORDENADO al salir (2ª auditoría, P1): `on_unmount` +
-        `call_later` era código muerto — la cola de mensajes de la App ya está
-        cerrada cuando corre el Unmount, así que `_shutdown_client` jamás se
-        ejecutaba y el cliente Telethon NUNCA se desconectaba (sesión SQLite
-        sin cierre limpio; y el runtime paraba con la ejecución a mitad de
-        paso, sin dejar auditado el camino). Orden: cancelar ejecución (su
-        handler deja estado + auditoría), desconectar cliente, parar runtime."""
+        """Cierre ORDENADO al salir: `on_unmount` + `call_later` no se
+        ejecutaba — la cola de mensajes de la App ya está cerrada cuando corre
+        el Unmount, así que `_shutdown_client` nunca se ejecutaba y el cliente
+        Telethon no se desconectaba (sesión SQLite sin cierre limpio; y el
+        runtime paraba con la ejecución a mitad de paso, sin dejar auditado el
+        camino). Orden: cancelar ejecución (su handler deja estado + auditoría),
+        desconectar cliente, parar runtime."""
         e = self.ejecucion
         if e is not None and e.tarea is not None and not e.tarea.done():
             e.tarea.cancel()
             # CancelledError es BaseException: await al shield del task
-            # cancelado la relanza aquí (2ª auditoría)
+            # cancelado la relanza aquí (robustez)
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await asyncio.wait_for(asyncio.shield(e.tarea), timeout=5)
         cliente, self._client = self._client, None
@@ -192,14 +229,13 @@ class SentryApp(App[None]):
     # La ejecución NO puede vivir en una Screen: Textual cancela los workers
     # de una pantalla al desmontarla y "volver al dashboard" mataba la cola
     # en silencio (hallazgo M6.1). La pantalla es solo una vista adjuntable.
-
     def iniciar_ejecucion(self, plan: ActionPlan) -> Ejecucion:
         """Inicia la ejecución del plan (1 a la vez) o devuelve la activa."""
         if self.ejecucion is not None and self.ejecucion.activa:
             return self.ejecucion
         ejecucion = Ejecucion(plan=plan)
         # Defensa en profundidad: el plan se re-valida contra las exclusiones
-        # duras ANTES de tocar el motor (auditoría 2026-09). Un plan con un
+        # duras ANTES de tocar el motor (robustez). Un plan con un
         # blindado dentro NO arranca, ni por accidente ni por edición manual.
         try:
             me = inventory.me_id()
@@ -216,14 +252,14 @@ class SentryApp(App[None]):
             )
         except CacheIncompatible:
             # inventario corrupto en este instante: la ejecución entra en
-            # error visible en vez de reventar el handler (3ª auditoría)
+            # error visible en vez de reventar el handler (robustez)
             ejecucion.estado = "error"
             ejecucion.mensaje = "inventario corrupto: refresca desde el dashboard"
             ejecucion.loguear(ejecucion.mensaje)
             self.ejecucion = ejecucion
             return ejecucion
         except ValueError as exc:
-            # whitelist no parseable (defensa en profundidad, 4ª auditoría):
+            # whitelist no parseable (defensa en profundidad, robustez):
             # la re-validación de blindados NO puede reventar el arranque
             ejecucion.estado = "error"
             ejecucion.mensaje = f"config inválida: {exc}"
@@ -256,78 +292,106 @@ class SentryApp(App[None]):
         try:
             # La TUI NO puede pedir --ack-over-limit: si los límites del TOML
             # están subidos, la ejecución se niega (mismo gate que el CLI —
-            # auditoría 2026-09: la TUI se saltaba validate_policy).
+            # robustez: la TUI se saltaba validate_policy).
             validate_policy(config.limits, ack_over_limit=False)
-            completados: set[CompletedStep] = load_completed(e.plan)
-            if completados:
-                e.loguear(f"reanudación: {len(completados)} pasos ya completados")
-
-            e.total = sum(
-                1
-                for peer in e.plan.peers
-                for step in peer.steps
-                if (peer.dialog.id, step.kind.value) not in completados
-            )
-            ritmo = config.limits.writes_per_min
-            e.mensaje = f"ejecutando: {e.total} pasos pendientes · ritmo {ritmo}/min"
-            e.loguear(f"plan {e.plan.plan_id} — {len(e.plan.peers)} peers")
-            e.estado = "corriendo"
-            # para el ETA compuesto: los cooldowns de borrado van ADEMÁS del bucket
-            e.pasos_borrado_pendientes = sum(
-                1
-                for peer in e.plan.peers
-                for step in peer.steps
-                if step.kind in OWN_MESSAGE_STEPS
-                and (peer.dialog.id, step.kind.value) not in completados
-            )
-
-            if e.total == 0:
-                e.estado = "fin"
-                e.mensaje = "nada pendiente: el plan ya está ejecutado"
-                e.loguear(e.mensaje)
-                return
-
-            client = await self.get_client()
-            motor = ExecutionEngine(
-                BridgedGateway(self._runtime, client),
-                EngineLimits(
-                    writes_per_min=config.limits.writes_per_min,
-                    leave_per_hour=config.limits.leave_groups_per_hour,
-                    block_per_hour=config.limits.block_per_hour,
-                    delete_messages_per_hour=config.limits.delete_messages_per_hour,
-                    floodwait_pause_threshold_s=config.limits.floodwait_pause_threshold_s,
-                    floodwait_pattern_window_s=config.limits.floodwait_pattern_window_s,
-                    own_messages_cooldown_s=config.limits.own_messages_cooldown_s,
-                ),
-                AuditLog(
-                    rotate_bytes=config.audit.rotate_bytes,
-                    keep_days=config.audit.keep_days,
-                ),
-                sleep=self._sleep_de_ejecucion(e),
-                sleep_budget=self._sleep_presupuesto(e),
-            )
-            def tras_paso(peer_id: int, paso: StepKind, resultado: StepOutcome) -> None:
-                # reutiliza el set cargado al inicio (guarda tras CADA paso,
-                # sin releer el JSON del disco en cada uno — O(n²) evitado)
-                completados.add(step_key(peer_id, paso))
-                save(e.plan, completados)
-                e.hechos += 1
-                if paso in OWN_MESSAGE_STEPS:
-                    e.pasos_borrado_pendientes -= 1
-                e.loguear(f"peer {peer_id} · {paso.value} → {resultado.value}")
-
             resultado: RunResult | None = None
-            # lock por plan: el CLI apply y la TUI no pueden correr el MISMO
-            # plan en dos procesos (auditoría 2026-09)
+            # lock GLOBAL + por plan, ANTES de cargar el runstate (robustez:
+            # TOCTOU — cargar completados antes del lock y conectar en medio
+            # permitía reanudar con un snapshot viejo si otro proceso acababa
+            # el plan; y dos planes DISTINTOS en paralelo duplicaban el bucket).
+            # Solo UNA ejecución en todo el sistema a la vez (CLI o TUI).
             with runstate.ejecucion_exclusiva(e.plan) as exclusivo:
                 if not exclusivo:
                     e.estado = "error"
-                    e.mensaje = "otro proceso está ejecutando este plan"
+                    e.mensaje = "otro proceso ya está ejecutando un plan"
                     e.loguear(
-                        "hay una ejecución ACTIVA de este plan (¿tg-sentry apply "
-                        "en otra terminal?): esta no arranca"
+                        "hay una ejecución ACTIVA en otro proceso (¿tg-sentry "
+                        "apply en otra terminal?): esta no arranca"
                     )
                     return
+                completados: set[CompletedStep] = load_completed(e.plan)
+                if completados:
+                    e.loguear(f"reanudación: {len(completados)} pasos ya completados")
+
+                e.total = sum(
+                    1
+                    for peer in e.plan.peers
+                    for step in peer.steps
+                    if (peer.dialog.id, step.kind.value) not in completados
+                )
+                ritmo = config.limits.writes_per_min
+                e.mensaje = f"ejecutando: {e.total} pasos pendientes · ritmo {ritmo}/min"
+                e.loguear(f"plan {e.plan.plan_id} — {len(e.plan.peers)} peers")
+                e.estado = "corriendo"
+                # para el ETA compuesto: los cooldowns de borrado van ADEMÁS del bucket
+                e.pasos_borrado_pendientes = sum(
+                    1
+                    for peer in e.plan.peers
+                    for step in peer.steps
+                    if step.kind in OWN_MESSAGE_STEPS
+                    and (peer.dialog.id, step.kind.value) not in completados
+                )
+
+                if e.total == 0:
+                    e.estado = "fin"
+                    e.mensaje = "nada pendiente: el plan ya está ejecutado"
+                    e.loguear(e.mensaje)
+                    return
+
+                if e.plan.is_expired():
+                    # fail-fast LOCAL (robustez): un plan vencido ni
+                    # siquiera conecta — antes gastaba conexión (y ahora la
+                    # verificación de identidad viva) para que el motor
+                    # rechazara el plan al arrancar
+                    raise PlanExpiredError(
+                        f"plan {e.plan.plan_id} expiró (TTL): regénéralo"
+                    )
+                client = await self.get_client()
+                # Identidad VIVA vs plan (robustez — mismo fix que el
+                # CLI): la caché y el plan compartían fuente; un swap de
+                # sesión con caché sin refrescar ejecutaba el plan de otra
+                # cuenta. La identidad sale de la sesión conectada.
+                me_vivo = await self.telethon_call(own_id(client))
+                if me_vivo != e.plan.me_id:
+                    e.estado = "error"
+                    e.mensaje = "la sesión NO es la cuenta del plan: regenera el plan"
+                    e.loguear(
+                        f"la sesión conectada (id {me_vivo}) no coincide con la "
+                        f"cuenta del plan (id {e.plan.me_id}): swap de sesión o "
+                        "caché sin refrescar — regenera el plan o re-haz login"
+                    )
+                    return
+                motor = ExecutionEngine(
+                    BridgedGateway(self._runtime, client),
+                    EngineLimits(
+                        writes_per_min=config.limits.writes_per_min,
+                        leave_per_hour=config.limits.leave_groups_per_hour,
+                        block_per_hour=config.limits.block_per_hour,
+                        delete_messages_per_hour=config.limits.delete_messages_per_hour,
+                        floodwait_pause_threshold_s=config.limits.floodwait_pause_threshold_s,
+                        floodwait_pattern_window_s=config.limits.floodwait_pattern_window_s,
+                        own_messages_cooldown_s=config.limits.own_messages_cooldown_s,
+                    ),
+                    AuditLog(
+                        rotate_bytes=config.audit.rotate_bytes,
+                        keep_days=config.audit.keep_days,
+                    ),
+                    sleep=self._sleep_de_ejecucion(e),
+                    sleep_budget=self._sleep_presupuesto(e),
+                )
+
+                def tras_paso(
+                    peer_id: int, paso: StepKind, resultado_paso: StepOutcome
+                ) -> None:
+                    # reutiliza el set cargado al inicio (guarda tras CADA paso,
+                    # sin releer el JSON del disco en cada uno — O(n²) evitado)
+                    completados.add(step_key(peer_id, paso))
+                    save(e.plan, completados)
+                    e.hechos += 1
+                    if paso in OWN_MESSAGE_STEPS:
+                        e.pasos_borrado_pendientes -= 1
+                    e.loguear(f"peer {peer_id} · {paso.value} → {resultado_paso.value}")
+
                 resultado = await motor.run(
                     e.plan, completed=completados, after_step=tras_paso
                 )
@@ -404,7 +468,7 @@ class SentryApp(App[None]):
 
         El motor usa este mismo canal para cooldown de borrado Y para
         FloodWait/backoff: la etiqueta es honesta sobre ambas causas
-        (auditoría 2026-09: un FloodWait rotulado "cooldown" engaña).
+        (robustez: un FloodWait rotulado "cooldown" engaña).
         """
 
         async def dormir(segundos: float) -> None:

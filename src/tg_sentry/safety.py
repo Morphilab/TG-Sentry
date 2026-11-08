@@ -32,15 +32,21 @@ def parse_whitelist(entries: list[str]) -> tuple[set[int], set[str]]:
 
     Los ids se AMAN por todas sus formas (canal marcado -100…, id crudo
     positivo, grupo negado): la whitelist protege, así que una forma
-    ambigua debe proteger DE MÁS, nunca de menos (auditoría 2026-09).
+    ambigua debe proteger DE MÁS, nunca de menos (robustez).
     """
     ids: set[int] = set()
     usernames: set[str] = set()
     for entry in entries:
         text = entry.strip().lstrip("@")
-        if text.lstrip("-").isdigit():
+        # "+12345" es un id con prefijo (int() lo admite): antes caía al
+        # username MUERTO en silencio — el usuario creía haber protegido un
+        # id y no había protección (robustez). "+-77" no pasa el filtro
+        # (requiere solo dígitos tras el '+') y sigue siendo username.
+        if text.lstrip("-").isdigit() or (
+            text.startswith("+") and text[1:].isdigit()
+        ):
             # "--77" pasaba lstrip("-").isdigit() y reventaba con ValueError
-            # crudo (3ª auditoría); un id malformado se RECHAZA con mensaje —
+            # crudo (robustez); un id malformado se RECHAZA con mensaje —
             # tratarlo como username dejaría de proteger en silencio
             try:
                 raw = int(text)
@@ -49,12 +55,18 @@ def parse_whitelist(entries: list[str]) -> tuple[set[int], set[str]]:
                     f"entrada de whitelist no válida: {entry!r} "
                     "(se espera un id numérico, con o sin '-', o un username)"
                 ) from exc
-            ids.add(raw)
-            ids.add(-raw)
+            # normaliza a la forma cruda positiva y ampara TODAS las formas
+            # (crudo +n, grupo -n, canal -(n+MARCA)): "12345", "-12345" y
+            # "-100…12345" protegen EXACTAMENTE lo mismo. Antes cada forma
+            # marcada añadía solo algunas (huecos contra la filosofía
+            # "proteger de más, nunca de menos" — robustez).
             if raw > 0:
-                ids.add(-(raw + _CANAL_MARCA))  # canal marcado desde id crudo
+                crudo = raw
             elif raw < -_CANAL_MARCA:
-                ids.add(raw + _CANAL_MARCA)  # id crudo desde canal marcado
+                crudo = -(raw + _CANAL_MARCA)
+            else:  # forma de grupo negada
+                crudo = -raw
+            ids.update((crudo, -crudo, -(crudo + _CANAL_MARCA)))
         elif text:
             usernames.add(text.lower())
     return ids, usernames
