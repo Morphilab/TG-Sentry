@@ -163,7 +163,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ack-over-limit", action="store_true", help="Reconoce límites subidos a mano en el TOML"
     )
     apply_cmd.add_argument(
-        "--limit-peers", type=int, default=None, help="Ejecutar solo los primeros N peers (piloto)"
+        "--limit-peers", type=int, default=None, help="Ejecutar solo los primeros N peers (prueba)"
     )
 
     audit_cmd = sub.add_parser("audit", help="Resumen de la auditoría")

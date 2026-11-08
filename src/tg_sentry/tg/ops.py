@@ -67,7 +67,7 @@ def to_dialog_info(dialog: object) -> DialogInfo:
     inner = getattr(dialog, "dialog", None)
     notify_settings = getattr(inner, "notify_settings", None)
     # Simplificación M1: mute_until presente = silenciado (aunque haya expirado
-    # hace poco); refinar en el spike si importa.
+    # hace poco); refinar en la verificación si importa.
     muted = getattr(notify_settings, "mute_until", None) is not None
 
     last_message_at = getattr(dialog, "date", None)
@@ -84,7 +84,7 @@ def to_dialog_info(dialog: object) -> DialogInfo:
         muted=muted,
         unread=int(getattr(dialog, "unread_count", 0) or 0),
         last_message_at=last_message_at,
-        role=None,  # exige GetParticipant por peer: spike M1 + M2 safety
+        role=None,  # exige GetParticipant por peer: verificación de la API + safety
     )
 
 
@@ -197,14 +197,14 @@ async def _ejecutar(client: object, step: StepKind, peer: int) -> int | None:
     elif step is StepKind.LEAVE:
         await client.delete_dialog(peer)  # type: ignore[attr-defined]
     elif step is StepKind.BLOCK:
-        # Telethon NO tiene client.block(): API cruda (hallazgo del piloto)
+        # Telethon NO tiene client.block(): API cruda (hallazgo verificado)
         await client(BlockRequest(id=peer))  # type: ignore[operator]
     elif step is StepKind.DELETE_OWN_FOR_ALL:
         return await delete_own_messages(client, peer, for_all=True)
     elif step is StepKind.DELETE_OWN_FOR_ME:
         return await delete_own_messages(client, peer, for_all=False)
     elif step is StepKind.CLEAR_HISTORY:
-        msg = "clear_history sin primitiva segura verificada (pendiente de piloto)"
+        msg = "clear_history sin primitiva segura verificada (pendiente de verificación)"
         raise UnsupportedStep(msg)
     else:  # pragma: no cover — StepKind cerrado
         msg = f"paso no soportado: {step}"

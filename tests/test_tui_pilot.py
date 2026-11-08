@@ -196,13 +196,11 @@ async def test_execute_plan_expirado_mensaje_claro(entorno: Path, monkeypatch) -
         assert "EXPIRÓ" in app.ejecucion.mensaje
 
 
-# NOTA (3ª auditoría): este test dispara, en algunas corridas, un
+# NOTA: este test dispara, en algunas corridas, un
 # PytestUnraisableExceptionWarning con la coroutine _aplicar_worker: artefacto
 # de timing de los workers `exclusive` de Textual en run_test (una coroutine
 # reemplazada antes de arrancar se cierra sin await). Inocuo y solo de test;
 # en producción el guard is_mounted cubre el desmontaje real.
-
-
 async def test_login_password_invalid_mensaje_claro(entorno: Path, monkeypatch) -> None:
     """str(PasswordInvalid) es "" — el catch genérico
     mostraba literalmente "Error: " a secas. Ahora el mensaje dice qué

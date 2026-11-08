@@ -36,9 +36,7 @@ def test_cmd_login_prompt_vacio_devuelve_error_de_config(monkeypatch) -> None:
     assert asyncio.run(_cmd_login(config)) == EXIT_CONFIG
 
 
-# --- Regresiones auditoría 2026-09 (rama api: login) ------------------------
-
-
+# --- Regresiones de robustez (api: login) ------------------------
 class _FakeCliente:
     """Sustituye a TelegramClient en build_client (monkeypatch). Sin red."""
 
@@ -86,7 +84,7 @@ class _FakeCliente:
 def test_start_code_login_desconecta_si_envio_de_codigo_falla(monkeypatch) -> None:
     """Sin fuga de cliente: si send_code_request explota, el cliente se
     desconecta ANTES de propagar (2 clientes sobre el mismo .session = riesgo
-    de corruptela en el reintento — auditoría 2026-09)."""
+    de corruptela en el reintento — robustez)."""
     import telethon.errors as te
 
     from tg_sentry.tg import client as cliente

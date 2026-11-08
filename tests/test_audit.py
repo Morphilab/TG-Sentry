@@ -91,9 +91,7 @@ def test_estados_no_colapsan() -> None:
     }
 
 
-# --- Regresiones auditoría 2026-09 (rama datos) -----------------------------
-
-
+# --- Regresiones de robustez (datos) -----------------------------
 def test_read_sobrevive_gz_truncado(tmp_path: Path) -> None:
     """F1: un .gz truncado (corte de luz en rotación) NO revienta read():
     la auditoría completa (y con ella el conteo 50/h·200/d) sigue viva."""
@@ -182,7 +180,7 @@ def test_cache_de_lectura_ve_los_appends_posteriores(tmp_path: Path) -> None:
 
 def test_lectura_tolera_gz_corrupto_por_bitrot(tmp_path: Path) -> None:
     """bit-rot dentro del deflate lanza zlib.error (NO OSError):
-    antes read() reventaba entero y con él el presupuesto anti-baneo."""
+    antes read() fallaba entero y con él el presupuesto anti-baneo."""
     import gzip as gz
 
     log = AuditLog(tmp_path, rotate_bytes=10**9, keep_days=90)
@@ -312,7 +310,7 @@ def test_cleanup_borra_gz_tmp_huerfano(tmp_path: Path) -> None:
 
 def test_rotacion_fallida_reintenta_en_la_siguiente(tmp_path: Path) -> None:
     """el .rotando conservado por una compresión fallida
-    se REINTENTA en la rotación siguiente — el log de la 3ª auditoría lo
+    se REINTENTA en la rotación siguiente — el log de la robustez lo
     prometía («reintentará al superar el umbral de nuevo»), pero el
     reintento no existía y cleanup destruía la única copia a 1h."""
     import tg_sentry.audit as audit_mod

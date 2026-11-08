@@ -32,7 +32,7 @@ def test_step_key_formato() -> None:
 
 
 def test_load_runstate_raiz_no_objeto_es_corrupto(tmp_path: Path) -> None:
-    """JSON válido pero no-objeto ("[1,2]") reventaba con
+    """JSON válido pero no-objeto ("[1,2]") fallaba con
     AttributeError en vez del fail-closed accionable."""
     import json as _json
 

@@ -203,7 +203,7 @@ def test_stderr_de_crash_de_tui_redacta_secretos() -> None:
     show_locals=True, así que los locals de SentryApp arrastran
     `self._config` (api_hash, teléfono) y `self._client`. El file de
     error_console queda envuelto para redactar al vuelo (mismo estándar que
-    el excepthook del CLI de la 2ª auditoría)."""
+    el excepthook del CLI de la robustez)."""
     import io
 
     from tg_sentry import redact as mod_redact

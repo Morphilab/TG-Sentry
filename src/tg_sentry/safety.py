@@ -124,7 +124,7 @@ def soft_warnings(
     if dialog.role is PeerRole.ADMIN:
         warnings.append("eres admin: al salir pierdes el rol")
     if dialog.role is None and dialog.kind in (PeerKind.GROUP, PeerKind.CHANNEL):
-        # role exige GetParticipant por peer (spike): mientras no se consulte,
+        # role exige GetParticipant por peer (verificación): mientras no se consulte,
         # no se puede descartar que el usuario sea creador (blindado de fábrica).
         warnings.append("rol sin verificar: no se puede descartar que seas creador")
     if (

@@ -250,9 +250,7 @@ async def test_eta_incluye_cooldowns_estimados(entorno: Path, monkeypatch) -> No
         assert app.ejecucion.estado == "abortada"
 
 
-# --- Regresiones de la auditoría 2026-09 (rama TUI) ------------------------
-
-
+# --- Regresiones de la robustez (rama TUI) ------------------------
 async def test_tecla_e_sobre_ejecucion_terminada_no_relanza(
     entorno: Path, app_con_motor_falso
 ) -> None:

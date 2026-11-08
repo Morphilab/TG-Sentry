@@ -203,7 +203,7 @@ def test_red_transitoria_agota_reintentos_y_aborta() -> None:
         result = await engine.run(plan)
         assert result.aborted is not None and "network" in result.aborted
         # contrato documentado: backoff 1,2,4,8,16 — transient_retries=3
-        # significa 3 REINTENTOS tras el intento inicial (auditoría 2026-09:
+        # significa 3 REINTENTOS tras el intento inicial (robustez:
         # antes el 3.º fallo abortaba sin el último backoff del contrato)
         assert recorder.sleeps == [0.001, 0.002, 0.004]
 
@@ -260,7 +260,7 @@ def test_tope_hora_espera_ventana_y_continua() -> None:
 
 def test_cap_por_tipo_espera_y_continua() -> None:
     # M6.4: el cap de tipo agotado espera la ventana en vez de abortar.
-    # TTL holgado (2ª auditoría): la espera de presupuesto re-valida el TTL.
+    # TTL holgado (robustez): la espera de presupuesto re-valida el TTL.
     async def run() -> None:
         reloj = RelojFalso()
         dialogs = [
@@ -285,7 +285,7 @@ def test_cap_por_tipo_espera_y_continua() -> None:
 
 def test_tope_dia_espera_ventana_y_continua() -> None:
     # M6.4: 200/día agotado → espera larga (desatendido), no abort.
-    # TTL holgado (2ª auditoría): la espera de presupuesto re-valida el TTL.
+    # TTL holgado (robustez): la espera de presupuesto re-valida el TTL.
     async def run() -> None:
         from tg_sentry.audit import AuditRecord
         from tg_sentry.limits import MAX_DESTRUCTIVE_PER_DAY
@@ -444,7 +444,7 @@ def test_rpcfailure_reintenta_y_falla_el_item_sin_abortar() -> None:
 
 
 def test_error_inesperado_no_tira_el_lote() -> None:
-    # regresión del piloto: un AttributeError reventaba la corrida entera
+    # regresión del prueba: un AttributeError fallaba la corrida entera
     async def run() -> None:
         plan = _plan(PeerKind.BOT, PeerKind.CHANNEL)
         gateway = FakeGateway({(100, "block"): [RuntimeError("bang")]})
@@ -466,12 +466,10 @@ def _tmp() -> Path:
     return Path(tempfile.mkdtemp(prefix="tgs-exec-"))
 
 
-# --- Regresiones auditoría 2026-09 (rama api→motor) -------------------------
-
-
+# --- Regresiones de robustez (api→motor) -------------------------
 def test_sesion_invalida_aborta_sin_quemar_reintentos(tmp_path: Path) -> None:
     """Sesión revocada = terminal: aborta la cola; antes caía a RpcFailure y
-    quemaba transient_retries por CADA ítem restante (auditoría 2026-09)."""
+    quemaba transient_retries por CADA ítem restante (robustez)."""
     from tg_sentry.errors import SessionInvalid
 
     gateway = FakeGateway(script={(100, "delete_chat"): [SessionInvalid("revocada")]})
@@ -673,7 +671,7 @@ def test_cap_delete_messages_gobierna_pasos_delete_own(tmp_path: Path) -> None:
 def test_fallo_io_auditoria_en_espera_presupuesto_aborta_no_lanza() -> None:
     """audit.read() dentro de _espera_presupuesto (y el acquire
     del bucket) corrían FUERA de toda barrera — un OSError exótico del
-    histórico reventaba el contrato 'run() NUNCA lanza'."""
+    histórico fallaba el contrato 'run() NUNCA lanza'."""
     async def run() -> None:
         plan = _plan(PeerKind.BOT)
         gateway = FakeGateway()
@@ -698,10 +696,8 @@ def test_fallo_io_auditoria_en_espera_presupuesto_aborta_no_lanza() -> None:
     asyncio.run(run())
 
 
-# -- 6ª auditoría: parciales en PeerGone/AdminRequired, omitir cortadores,
+# -- parciales en PeerGone/AdminRequired, omitir cortadores,
 # cooldown justo y TTL dentro de la espera ----------------------------------
-
-
 def test_peer_gone_con_parcial_cuenta_y_espacia() -> None:
     """un PeerGone a mitad de un lote delete_own BORRÓ
     mensajes en el servidor — el conteo viaja a auditoría (msgs=N), cuenta

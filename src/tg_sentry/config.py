@@ -111,7 +111,7 @@ class TelegramSection(BaseModel):
     def _session_no_es_string_session(cls, value: str) -> str:
         # StringSession SOLO por TG_SENTRY_STRING_SESSION (invariante del
         # proyecto): una pegada en el TOML se trataría como RUTA y save_config
-        # la reescribiría (3ª auditoría). Es una ruta corta; un blob base64
+        # la reescribiría (robustez). Es una ruta corta; un blob base64
         # largo sin separadores de ruta es una session-string.
         value = value.strip()
         if len(value) > 128 and not any(c in value for c in "/\\"):
@@ -134,7 +134,7 @@ class SafetySection(BaseModel):
     def _whitelist_parseable(cls, value: list[str]) -> list[str]:
         # Una whitelist malformada ("--77") NO puede colarse en la config:
         # la protección no se puede parsear → se rechaza en la carga con
-        # mensaje (4ª auditoría: antes reventaba tarde, en build_plan del
+        # mensaje (robustez: antes reventaba tarde, en build_plan del
         # CLI con traceback y en la TUI con pantalla de crash).
         from tg_sentry.safety import parse_whitelist
 
@@ -254,7 +254,7 @@ def save_config(config: Config, path: Path | None = None) -> Path:
     else:
         doc = tomlkit.parse(EXAMPLE_TOML)
     _apply_to_doc(config, doc)
-    # tmp + replace con 0600 EN LA CREACIÓN (2ª auditoría): el api_hash y el
+    # tmp + replace con 0600 EN LA CREACIÓN (robustez): el api_hash y el
     # teléfono nacían con umask (0644) hasta el chmod final; un crash a mitad
     # de write_text dejaba además un TOML truncado
     payload = tomlkit.dumps(doc)
@@ -265,7 +265,7 @@ def save_config(config: Config, path: Path | None = None) -> Path:
         handle.flush()
         os.fsync(handle.fileno())
     tmp.replace(file)
-    # fsync del dir tras el replace (5ª auditoría, paridad con runstate):
+    # fsync del dir tras el replace (robustez, paridad con runstate):
     # sin él, un corte de luz justo tras guardar podía revertir el rename
     paths.fsync_dir(file.parent)
     file.chmod(0o600)

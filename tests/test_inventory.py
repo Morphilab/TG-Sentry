@@ -122,7 +122,7 @@ def test_refresh_con_cliente_fake(tmp_path: Path) -> None:
 
 
 def test_refresh_sin_me_id_no_escribe_cache(tmp_path: Path) -> None:
-    """FAIL-CLOSED: sin identidad propia la caché NO se toca (auditoría 2026-09)."""
+    """FAIL-CLOSED: sin identidad propia la caché NO se toca (robustez)."""
     import asyncio
 
     db = tmp_path / "inventory.db"
@@ -151,7 +151,7 @@ def test_refresh_sin_me_id_no_escribe_cache(tmp_path: Path) -> None:
 
 
 def test_refresh_descarta_dialogos_sin_id(tmp_path: Path) -> None:
-    """Un diálogo sin id no se inventa como 0: se descarta (auditoría 2026-09)."""
+    """Un diálogo sin id no se inventa como 0: se descarta (robustez)."""
     import asyncio
 
     from tests.fakes import FakeDialog
@@ -192,9 +192,7 @@ def test_store_sin_me_id_lo_deja_en_none(tmp_path: Path) -> None:
     assert inventory.me_id(db) is None
 
 
-# --- Regresiones auditoría 2026-09 (rama datos) -----------------------------
-
-
+# --- Regresiones de robustez (datos) -----------------------------
 def test_db_creada_por_lectura_nace_0600(tmp_path: Path) -> None:
     """F5: los paths de LECTURA creaban la DB con permisos de umask."""
     db = tmp_path / "inventory.db"
@@ -238,7 +236,7 @@ def test_contact_ids_forma_invalida_devuelve_vacio_con_warning(tmp_path: Path) -
 
 
 def test_me_id_corrupto_devuelve_none_con_warning(tmp_path: Path) -> None:
-    """int() sobre meta corrupta reventaba con traceback en
+    """int() sobre meta corrupta fallaba con traceback en
     vez del camino fail-closed accionable del CLI."""
     import sqlite3
 
@@ -291,7 +289,7 @@ def test_load_last_message_naive_no_reventa_filtros(tmp_path: Path) -> None:
 
 
 def test_db_corrupta_levanta_cache_incompatible(tmp_path: Path) -> None:
-    """un inventory.db ilegible (basura, disco dañado) reventaba
+    """un inventory.db ilegible (basura, disco dañado) fallaba
     con traceback crudo y mataba la TUI en el arranque; ahora es
     CacheIncompatible accionable en TODAS las lecturas."""
     import pytest
@@ -313,7 +311,7 @@ def test_db_corrupta_levanta_cache_incompatible(tmp_path: Path) -> None:
 def test_fetched_at_corrupta_es_cache_incompatible(tmp_path: Path) -> None:
     """meta fetched_at corrupto → CacheIncompatible visible
     (contrato "corrupto en TODAS las lecturas"), no ValueError crudo que
-    reventaba cache_age/is_stale en CLI y TUI."""
+    fallaba cache_age/is_stale en CLI y TUI."""
     import sqlite3
 
     import pytest

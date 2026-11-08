@@ -1,6 +1,6 @@
 # Modelo de seguridad y amenazas — tg-sentry
 
-> Estado: **v0.1.1 (documento vivo)** — se amplía con cada mejora.
+> Estado: **v0.1.2 (documento vivo)** — se amplía con cada mejora.
 
 ## Advertencia principal (no negociable)
 

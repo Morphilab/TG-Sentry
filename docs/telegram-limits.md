@@ -1,6 +1,6 @@
 # Límites conocidos de Telegram — tg-sentry
 
-> Estado: **v0.1.1**. Telegram NO publica límites oficiales para clientes MTProto;
+> Estado: **v0.1.2**. Telegram NO publica límites oficiales para clientes MTProto;
 > esto es experiencia acumulada de la comunidad + hallazgos del piloto real
 > (protocolo interno del proyecto).
 

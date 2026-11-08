@@ -22,7 +22,7 @@ class PeerKind(StrEnum):
 
 
 class PeerRole(StrEnum):
-    """Rol propio dentro del peer. None = aún no consultado (spike M1)."""
+    """Rol propio dentro del peer. None = aún no consultado (verificación de la API)."""
 
     CREATOR = "creator"
     ADMIN = "admin"

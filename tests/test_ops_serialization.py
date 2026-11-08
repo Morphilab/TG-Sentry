@@ -24,7 +24,7 @@ def test_getcontacts_hash_int_serializa() -> None:
 
 
 def test_getcontacts_hash_str_es_struct_error() -> None:
-    """Documentación ejecutable del P1: hash="" jamás llega a la red.
+    """Documentación ejecutable del hash="" jamás llega a la red.
 
     Si este test falla porque ya NO lanza, la librería cambió de contrato:
     revisar la llamada en tg/ops.py contact_user_ids.

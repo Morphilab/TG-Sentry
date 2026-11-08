@@ -67,7 +67,7 @@ def test_valor_vacio_rechazado() -> None:
 
 
 def test_inactive_fuera_de_rango_es_filtererror_no_validationerror() -> None:
-    """inactive=-5 pasaba el parseo y reventaba con
+    """inactive=-5 pasaba el parseo y fallaba con
     ValidationError de pydantic (traceback crudo en el CLI)."""
     with pytest.raises(FilterError):
         parse_filter_expr("inactive=-5")

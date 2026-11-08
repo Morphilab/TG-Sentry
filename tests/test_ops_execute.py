@@ -51,7 +51,7 @@ def test_block_usa_blockrequest_por_api_cruda() -> None:
     async def run() -> None:
         client = FakeClient()
         await execute_step(client, StepKind.BLOCK, _bot())
-        # regresión del piloto: Telethon NO tiene client.block()
+        # regresión del prueba: Telethon NO tiene client.block()
         assert client.calls == [("raw", "BlockRequest")]
 
     asyncio.run(run())
@@ -130,9 +130,7 @@ def test_peer_invalid_y_floodwait_se_traducen() -> None:
     asyncio.run(run())
 
 
-# --- Regresiones de la auditoría 2026-09 (rama api/telethon) ----------------
-
-
+# --- Regresiones de la robustez (rama api/telethon) ----------------
 def test_flood_error_base_cubre_premium_y_slowmode() -> None:
     """420 FLOOD_PREMIUM_WAIT y SLOWMODE_WAIT NO heredan de FloodWaitError:
     antes caían a RpcFailure (reintento de 1-2s sin respetar la espera)."""

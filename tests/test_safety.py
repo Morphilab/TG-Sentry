@@ -74,7 +74,7 @@ def test_aviso_admin_pierde_rol() -> None:
 
 
 def test_me_id_none_bloquea_todo_fail_closed() -> None:
-    """Sin identidad propia NADA es operable (auditoría 2026-09, P1)."""
+    """Sin identidad propia NADA es operable (robustez)."""
     razones = hard_exclusions(
         _dialog(id=100), me_id=None, whitelist_ids=set(), whitelist_usernames=set()
     )
@@ -97,7 +97,7 @@ def test_contacto_exclusion_dura_no_aviso() -> None:
 
 
 def test_role_none_avisa_en_grupo_y_canal() -> None:
-    """role=None (spike GetParticipant pendiente): no se puede descartar ser
+    """role=None (GetParticipant pendiente): no se puede descartar ser
     creador — aviso honesto en grupos/canales, nada en privados/bots."""
     reciente = datetime.now(UTC) - timedelta(days=400)
     grupo = soft_warnings(

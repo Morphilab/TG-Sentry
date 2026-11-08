@@ -50,7 +50,7 @@ class RpcFailure(StepError):
 
 
 class UnsupportedStep(StepError):
-    """Paso sin primitiva segura verificada (p. ej. clear_history pre-piloto)."""
+    """Paso sin primitiva segura verificada (p. ej. clear_history previa verificación)."""
 
 
 class SessionInvalid(StepError):

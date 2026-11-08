@@ -45,7 +45,7 @@ class _OwnClient:
 
         async def _gen():
             # la API REAL itera de más NUEVO a más viejo salvo reverse=True
-            # (auditoría 2026-09: el fake antiguo asumía ascendente y ocultaba
+            # (robustez: el fake antiguo asumía ascendente y ocultaba
             # que el código no pedía reverse)
             if reverse:
                 for i in range(min(self._n, limit)):
@@ -271,9 +271,7 @@ def test_cooldown_final_omitido_sin_mas_borrados() -> None:
     asyncio.run(run())
 
 
-# --- Regresiones auditoría 2026-09 (rama api) -------------------------------
-
-
+# --- Regresiones de robustez (api) -------------------------------
 def test_delete_own_itera_del_mas_viejo_al_mas_nuevo() -> None:
     """La API itera más-nuevo→más-viejo por defecto; el paso exige reverse:
     lo primero que se borra debe ser lo MÁS VIEJO (contrato del docstring)."""
@@ -411,7 +409,7 @@ def test_delete_own_for_me_rechazado_en_entidad_canal() -> None:
 
 
 def test_delete_own_conteo_real_pts_count() -> None:
-    """El conteo REAL es pts_count del servidor (2ª auditoría): el fake
+    """El conteo REAL es pts_count del servidor (robustez): el fake
     antiguo devolvía dicts y solo ejercitaba el fallback len(lote)."""
     async def run() -> None:
         class _Resp:

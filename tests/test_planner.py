@@ -86,9 +86,7 @@ def test_contadores_destructivos() -> None:
     }
 
 
-# --- Regresiones de la auditoría 2026-09 -----------------------------------
-
-
+# --- Regresiones de robustez -----------------------------------
 def test_leave_false_en_usuario_sin_borrado_propio_excluye() -> None:
     """--no-leave sin delete_own NO puede borrar el chat privado igual."""
     user = [d for d in _to_infos() if d.kind is PeerKind.USER]
@@ -136,7 +134,7 @@ def test_orden_grupo_delete_own_antes_de_clear_history() -> None:
 
 
 def test_build_plan_sin_me_id_rechaza() -> None:
-    """me_id es obligatorio: fail-closed (auditoría 2026-09)."""
+    """me_id es obligatorio: fail-closed (robustez)."""
     import pytest
 
     with pytest.raises(ValueError, match="me_id"):
@@ -181,7 +179,7 @@ def test_canal_delete_own_me_excluido_por_imposible() -> None:
     condenado y el leave se ejecutaba tras su fallo, destruyendo la única
     ventana de borrado. Ahora el peer queda excluido con razón accionable;
     con 'all' el orden contractual se mantiene (delete_own SIEMPRE antes
-    de salir — regresión de la 3ª auditoría)."""
+    de salir — regresión de la robustez)."""
     canales = [d for d in _to_infos() if d.kind is PeerKind.CHANNEL]
     plan = build_plan(canales, _options(delete_own="me"), me_id=1)
     assert plan.peers == []
@@ -209,7 +207,7 @@ def test_grupo_clear_history_solo_al_salir() -> None:
 
 def test_blindados_en_plan_rechaza_plan_sin_me_id() -> None:
     """Fail-closed: un plan cuyo JSON no lleva me_id (antiguo o editado a mano)
-    NO pasa la re-validación de identidad (auditoría 2026-09, P2)."""
+    NO pasa la re-validación de identidad (robustez)."""
     plan = build_plan(_to_infos(), _options(), me_id=1)
     sin_me = plan.model_copy(deep=True, update={"me_id": None})
     hallados = blindados_en_plan(sin_me, me_id=1)
@@ -218,7 +216,7 @@ def test_blindados_en_plan_rechaza_plan_sin_me_id() -> None:
 
 def test_plan_con_expires_naive_no_revienta() -> None:
     """un plan JSON editado a mano con expires_at naive
-    reventaba la comparación contra now(UTC) con TypeError (fuera del
+    fallaba la comparación contra now(UTC) con TypeError (fuera del
     contrato "is_expired nunca lanza")."""
     plan = build_plan(_to_infos(), _options(), me_id=1)
     naive = plan.model_copy(

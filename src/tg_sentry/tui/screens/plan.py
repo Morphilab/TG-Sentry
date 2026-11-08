@@ -110,7 +110,7 @@ class PlanScreen(BaseScreen):
             block_bots=self.query_one("#o-block-bots", Checkbox).value,
             block_private=self.query_one("#o-block-private", Checkbox).value,
             revoke_private=self.query_one("#o-revoke", Checkbox).value,
-            clear_history_before_leave=False,  # UnsupportedStep hasta piloto
+            clear_history_before_leave=False,  # UnsupportedStep hasta verificar la primitiva
             delete_own=delete_own,
             leave=self.query_one("#o-leave", Checkbox).value,
             ttl_min=self.sentry_app.config.plan.ttl_min,

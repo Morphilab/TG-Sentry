@@ -52,9 +52,7 @@ def test_export_ruta_explicita_no_toca_permisos_del_directorio(tmp_path: Path) -
     assert stat.S_IMODE(target.stat().st_mode) == 0o600  # el archivo es nuestro
 
 
-# --- Regresiones auditoría 2026-09 (rama datos) -----------------------------
-
-
+# --- Regresiones de robustez (datos) -----------------------------
 def test_csv_neutraliza_inyeccion_de_formulas(tmp_path: Path) -> None:
     """El `name` lo controla un tercero: '=cmd...' no puede llegar crudo al
     CSV (se ejecutaría como fórmula al abrirlo en Excel/LibreOffice)."""

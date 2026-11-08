@@ -79,7 +79,7 @@ class FakeMe:
 
 class FakeSessionClient:
     """Cliente mínimo con get_me: la app verifica la identidad VIVA de la
-    sesión contra el plan antes de ejecutar (6ª auditoría) — los fakes
+    sesión contra el plan antes de ejecutar (robustez) — los fakes
     replican la interfaz REAL que el código toca (lección reiterada: un
     fake incompleto tapa el contrato)."""
 

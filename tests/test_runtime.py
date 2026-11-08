@@ -92,9 +92,7 @@ def test_runtime_shutdown_idempotente() -> None:
     runtime.shutdown()  # no explota
 
 
-# --- Regresiones auditoría 2026-09 (rama api) -------------------------------
-
-
+# --- Regresiones de robustez (api) -------------------------------
 def test_runtime_call_con_hilo_muerto_falla_alto() -> None:
     """Si el hilo del runtime murió sin cerrar el loop, call() NO puede
     quedarse colgada en un futuro jamás resuelto: RuntimeError inmediato."""
@@ -116,7 +114,7 @@ def test_runtime_call_con_hilo_muerto_falla_alto() -> None:
             assert "no disponible" in str(exc)
         finally:
             # la coroutine nunca se programó (loop muerto): close() evita el
-            # RuntimeWarning de GC "never awaited" (4ª auditoría)
+            # RuntimeWarning de GC "never awaited" (robustez)
             coro.close()
     finally:
         rt.shutdown()

@@ -72,11 +72,9 @@ def test_servicio_y_propia_cuenta_blindados() -> None:
         assert modelo.toggle(dialog) is False, dialog.id
 
 
-# --- Regresiones de la auditoría 2026-09 -----------------------------------
-
-
+# --- Regresiones de robustez -----------------------------------
 def test_sin_me_id_no_hay_nada_seleccionable() -> None:
-    """Fail-closed: sin identidad propia, nada se puede marcar (P1)."""
+    """Fail-closed: sin identidad propia, nada se puede marcar."""
     modelo = SelectionModel(me_id=None)
     dialogs = _to_infos()
     for dialog in dialogs:
